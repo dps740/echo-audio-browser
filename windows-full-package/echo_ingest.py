@@ -22,6 +22,7 @@ from pathlib import Path
 
 # Configuration - UPDATE THIS to your server URL
 SERVER_URL = "http://localhost:8765"
+AUDIO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio")
 
 
 def get_video_info(url):
@@ -110,8 +111,47 @@ def parse_vtt(vtt_path):
     return segments
 
 
+def download_audio(url, video_id):
+    """Download audio file locally. Returns local URL path."""
+    os.makedirs(AUDIO_DIR, exist_ok=True)
+    output_path = os.path.join(AUDIO_DIR, f"{video_id}.mp3")
+    
+    if os.path.exists(output_path):
+        print(f"  ✓ Audio already downloaded")
+        return f"/audio/{video_id}.mp3"
+    
+    print(f"  Downloading audio...")
+    cmd = [
+        "yt-dlp",
+        "-f", "bestaudio",
+        "-x", "--audio-format", "mp3",
+        "--audio-quality", "5",  # Medium quality, smaller files
+        "-o", output_path.replace('.mp3', '.%(ext)s'),
+        url
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    
+    # yt-dlp may save with different extension, find and rename
+    base = output_path.replace('.mp3', '')
+    for ext in ['.mp3', '.m4a', '.opus', '.webm', '.wav']:
+        if os.path.exists(base + ext):
+            if ext != '.mp3':
+                os.rename(base + ext, output_path)
+            break
+    
+    if os.path.exists(output_path):
+        size_mb = os.path.getsize(output_path) / 1024 / 1024
+        print(f"  ✓ Downloaded ({size_mb:.1f} MB)")
+        return f"/audio/{video_id}.mp3"
+    else:
+        print(f"  ⚠️ Download may have failed, using stream URL fallback")
+        cmd = ["yt-dlp", "-f", "bestaudio", "-g", url]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return result.stdout.strip() if result.returncode == 0 else url
+
+
 def get_audio_url(url):
-    """Get direct audio stream URL."""
+    """Legacy: Get direct audio stream URL (expires!)."""
     cmd = ["yt-dlp", "-f", "bestaudio", "-g", url]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -232,9 +272,9 @@ def main():
     
     print(f"✓ Found {len(segments)} caption segments")
     
-    print(f"\nGetting audio URL...")
-    audio_url = get_audio_url(args.url)
-    print(f"✓ Audio URL obtained")
+    print(f"\nDownloading audio...")
+    audio_url = download_audio(args.url, video_id)
+    print(f"✓ Audio ready: {audio_url}")
     
     print(f"\nSending to Echo server...")
     result = send_to_server(

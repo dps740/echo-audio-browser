@@ -18,7 +18,7 @@ import argparse
 import time
 import requests
 from pathlib import Path
-from echo_ingest import get_captions, get_audio_url, send_to_server
+from echo_ingest import get_captions, download_audio, send_to_server
 
 SERVER_URL = "http://localhost:8765"
 
@@ -226,8 +226,8 @@ def ingest_video(video, podcast_name):
         
         print(f"  ✓ {len(segments)} caption segments")
         
-        # Get audio URL
-        audio_url = get_audio_url(url)
+        # Download audio locally
+        audio_url = download_audio(url, video_id)
         
         # Send to server
         result = send_to_server(

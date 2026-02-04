@@ -1,11 +1,19 @@
 @echo off
-echo Starting Echo Server...
+echo ============================================
+echo    ECHO - Topic-First Audio Browser
+echo ============================================
 echo.
 echo Installing dependencies (first time only)...
-pip install fastapi uvicorn chromadb pydantic-settings httpx openai anthropic --quiet
+pip install fastapi uvicorn chromadb pydantic-settings httpx --quiet 2>nul
 echo.
-echo Starting server at http://localhost:8765
-echo Open http://localhost:8765/player in your browser
+echo Starting server...
+echo.
+echo   Player: http://localhost:8765/player
+echo   API:    http://localhost:8765/docs
+echo.
+echo   Keep this window open!
+echo   Open a new cmd window to add podcasts.
+echo ============================================
 echo.
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
 pause

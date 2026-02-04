@@ -57,6 +57,11 @@ async def health():
     return {"status": "healthy"}
 
 
+# Mount audio files directory
+audio_dir = os.path.join(os.path.dirname(__file__), "..", "audio")
+os.makedirs(audio_dir, exist_ok=True)
+app.mount("/audio", StaticFiles(directory=audio_dir), name="audio")
+
 # Mount static files for web player (if exists)
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
 if os.path.exists(static_dir):
@@ -70,4 +75,4 @@ if os.path.exists(static_dir):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8765)

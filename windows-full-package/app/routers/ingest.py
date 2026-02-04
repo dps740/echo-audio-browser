@@ -88,10 +88,10 @@ async def ingest_episode(request: IngestRequest):
                 "source": request.source,
             })
         
-        # Add in batches
+        # Upsert in batches (handles duplicates safely)
         batch_size = 50
         for j in range(0, len(ids), batch_size):
-            collection.add(
+            collection.upsert(
                 ids=ids[j:j+batch_size],
                 documents=docs[j:j+batch_size],
                 metadatas=metas[j:j+batch_size]

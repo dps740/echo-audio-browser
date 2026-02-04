@@ -3,8 +3,16 @@
 import json
 from typing import List, Dict, Any
 from dataclasses import dataclass
-import openai
-import anthropic
+
+try:
+    import openai
+except ImportError:
+    openai = None
+
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
 
 from app.config import settings
 from app.services.transcription import TranscriptResult, TranscriptWord

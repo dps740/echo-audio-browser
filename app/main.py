@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 import os
 
 from app.config import settings
-from app.routers import feeds, segments, playlists, ingest
+from app.routers import feeds, segments, playlists, ingest, library, youtube_ingest
 
 
 # Create app
@@ -33,6 +33,8 @@ app.include_router(feeds.router)
 app.include_router(segments.router)
 app.include_router(playlists.router)
 app.include_router(ingest.router)
+app.include_router(library.router)
+app.include_router(youtube_ingest.router)
 
 
 @app.get("/")

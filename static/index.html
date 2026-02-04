@@ -5,225 +5,1008 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Echo - Topic Audio Browser</title>
     <style>
+        :root {
+            --bg-primary: #0f0f1a;
+            --bg-secondary: #1a1a2e;
+            --bg-tertiary: #16213e;
+            --bg-card: #1e2a45;
+            --bg-hover: #252b45;
+            --accent: #00d9ff;
+            --accent-dim: rgba(0, 217, 255, 0.12);
+            --accent-hover: #00b8d9;
+            --text-primary: #eee;
+            --text-secondary: #aab;
+            --text-muted: #667;
+            --success: #4ade80;
+            --warning: #fbbf24;
+            --danger: #f87171;
+            --border: rgba(255,255,255,0.06);
+            --radius: 10px;
+            --radius-sm: 6px;
+        }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1a1a2e;
-            color: #eee;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
             min-height: 100vh;
+        }
+
+        /* ═══ Navigation ═══ */
+        .nav {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 0 24px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .nav-brand {
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--accent);
+            margin-right: 24px;
+            padding: 16px 0;
+            cursor: default;
+        }
+        .nav-tab {
+            padding: 16px 18px;
+            color: var(--text-muted);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.15s;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .nav-tab:hover { color: var(--text-secondary); }
+        .nav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+        /* ═══ Layout ═══ */
+        .page { display: none; padding: 24px; max-width: 1100px; margin: 0 auto; }
+        .page.active { display: block; }
+        .page-title { font-size: 24px; font-weight: 700; margin-bottom: 20px; }
+
+        /* ═══ Cards ═══ */
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
             padding: 20px;
+            margin-bottom: 16px;
         }
-        .container { max-width: 800px; margin: 0 auto; }
-        h1 { text-align: center; margin-bottom: 20px; color: #00d9ff; }
-        .search-box { display: flex; gap: 10px; margin-bottom: 20px; }
-        input[type="text"] {
-            flex: 1; padding: 12px 16px; border: none; border-radius: 8px;
-            background: #16213e; color: #eee; font-size: 16px;
+        .card-title { font-size: 14px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+        .card-value { font-size: 32px; font-weight: 700; color: var(--accent); }
+        .card-sub { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
         }
-        button {
-            padding: 12px 24px; border: none; border-radius: 8px;
-            background: #00d9ff; color: #1a1a2e; font-weight: bold;
-            cursor: pointer; transition: background 0.2s;
+
+        /* ═══ Forms ═══ */
+        input[type="text"], input[type="number"], select {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 10px 14px;
+            border-radius: var(--radius-sm);
+            font-size: 14px;
+            width: 100%;
+            outline: none;
+            transition: border-color 0.15s;
         }
-        button:hover { background: #00b8d9; }
-        .player-section {
-            background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 20px;
+        input:focus, select:focus { border-color: var(--accent); }
+        input::placeholder { color: var(--text-muted); }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 10px 20px;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
         }
-        .now-playing { margin-bottom: 15px; }
-        .now-playing h3 { color: #00d9ff; margin-bottom: 5px; }
-        .now-playing p { color: #aaa; font-size: 14px; }
-        audio { width: 100%; margin-top: 10px; }
-        .playlist { background: #16213e; border-radius: 12px; padding: 20px; }
-        .playlist h2 { margin-bottom: 15px; color: #00d9ff; }
-        .segment {
-            background: #1a1a2e; border-radius: 8px; padding: 15px;
-            margin-bottom: 10px; cursor: pointer; transition: background 0.2s;
+        .btn-primary { background: var(--accent); color: var(--bg-primary); }
+        .btn-primary:hover { background: var(--accent-hover); }
+        .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border); }
+        .btn-secondary:hover { background: var(--bg-hover); }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-danger:hover { opacity: 0.85; }
+        .btn-sm { padding: 6px 12px; font-size: 13px; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .input-row { display: flex; gap: 10px; margin-bottom: 16px; }
+        .input-row input { flex: 1; }
+
+        /* ═══ Tables/Lists ═══ */
+        .list-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 16px;
+            background: var(--bg-tertiary);
+            border-radius: var(--radius-sm);
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: background 0.15s;
         }
-        .segment:hover { background: #252545; }
-        .segment.active { border: 2px solid #00d9ff; background: #1a3a2e; }
-        .segment-title { font-weight: bold; margin-bottom: 5px; }
-        .segment-meta { color: #888; font-size: 13px; margin-bottom: 8px; }
-        .segment-summary { color: #ccc; font-size: 14px; }
-        .tags { margin-top: 8px; }
+        .list-item:hover { background: var(--bg-hover); }
+        .list-item-title { font-weight: 600; font-size: 15px; }
+        .list-item-meta { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+        .list-item-right { text-align: right; flex-shrink: 0; margin-left: 16px; }
+        .list-item-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* ═══ Tags ═══ */
         .tag {
-            display: inline-block; background: #00d9ff22; color: #00d9ff;
-            padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-right: 5px;
+            display: inline-block;
+            background: var(--accent-dim);
+            color: var(--accent);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            margin-right: 4px;
+            margin-top: 4px;
         }
-        .error { color: #ff6b6b; background: #ff6b6b22; padding: 10px; border-radius: 8px; margin-bottom: 20px; }
-        .loading { text-align: center; padding: 40px; color: #888; }
-        .status { font-size: 12px; color: #888; margin-top: 10px; }
-        .progress-info { font-size: 13px; color: #00d9ff; margin-top: 5px; }
+
+        /* ═══ Status badges ═══ */
+        .badge-success { background: rgba(74,222,128,0.15); color: var(--success); }
+        .badge-warning { background: rgba(251,191,36,0.15); color: var(--warning); }
+        .badge-danger { background: rgba(248,113,113,0.15); color: var(--danger); }
+        .badge-info { background: var(--accent-dim); color: var(--accent); }
+
+        /* ═══ Player ═══ */
+        .player-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border);
+            padding: 12px 24px;
+            display: none;
+            z-index: 100;
+        }
+        .player-bar.active { display: flex; align-items: center; gap: 16px; }
+        .player-info { flex: 1; min-width: 0; }
+        .player-title { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .player-meta { font-size: 12px; color: var(--text-secondary); }
+        .player-controls { display: flex; align-items: center; gap: 10px; }
+        .player-controls button {
+            background: none;
+            border: none;
+            color: var(--text-primary);
+            font-size: 20px;
+            cursor: pointer;
+            padding: 4px;
+        }
+        .player-controls button:hover { color: var(--accent); }
+        audio { display: none; }
+        .player-progress {
+            flex: 2;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        .progress-bar {
+            flex: 1;
+            height: 4px;
+            background: var(--bg-tertiary);
+            border-radius: 2px;
+            cursor: pointer;
+            position: relative;
+        }
+        .progress-fill {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 2px;
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        /* ═══ Segment cards (player) ═══ */
+        .segment-card {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 14px 16px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .segment-card:hover { background: var(--bg-hover); border-color: rgba(0,217,255,0.2); }
+        .segment-card.playing { border-color: var(--accent); background: rgba(0,217,255,0.05); }
+        .segment-card .seg-title { font-weight: 600; margin-bottom: 4px; }
+        .segment-card .seg-meta { font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; }
+        .segment-card .seg-text { font-size: 14px; color: var(--text-secondary); line-height: 1.5; }
+
+        /* ═══ Empty states ═══ */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+        .empty-state .icon { font-size: 48px; margin-bottom: 16px; }
+        .empty-state h3 { font-size: 18px; color: var(--text-secondary); margin-bottom: 8px; }
+        .empty-state p { font-size: 14px; max-width: 400px; margin: 0 auto; }
+
+        /* ═══ Ingest page ═══ */
+        .podcast-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 12px;
+        }
+        .podcast-card {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 14px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .podcast-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+        .podcast-card .pc-name { font-weight: 600; margin-bottom: 4px; }
+        .podcast-card .pc-desc { font-size: 13px; color: var(--text-secondary); }
+        .podcast-card .pc-handle { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+
+        /* ═══ Job cards ═══ */
+        .job-card {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 16px;
+            margin-bottom: 10px;
+        }
+        .job-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .job-title { font-weight: 600; }
+        .job-progress { margin-top: 8px; }
+        .job-progress-bar {
+            height: 6px;
+            background: var(--bg-primary);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 6px;
+        }
+        .job-progress-fill {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 3px;
+            transition: width 0.5s;
+        }
+        .job-videos { margin-top: 10px; max-height: 200px; overflow-y: auto; }
+        .job-video {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            font-size: 13px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* ═══ Breadcrumb ═══ */
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+        .breadcrumb a { color: var(--accent); cursor: pointer; text-decoration: none; }
+        .breadcrumb a:hover { text-decoration: underline; }
+
+        /* ═══ Scrollbar ═══ */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--bg-hover); border-radius: 3px; }
+
+        /* ═══ Loading ═══ */
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Bottom padding for player bar */
+        body.player-active { padding-bottom: 80px; }
+
+        /* ═══ Responsive ═══ */
+        @media (max-width: 640px) {
+            .nav { padding: 0 12px; overflow-x: auto; }
+            .nav-tab { padding: 14px 12px; font-size: 13px; white-space: nowrap; }
+            .page { padding: 16px; }
+            .stat-grid { grid-template-columns: repeat(2, 1fr); }
+            .podcast-grid { grid-template-columns: 1fr; }
+            .player-bar { flex-wrap: wrap; padding: 10px 12px; }
+            .player-progress { flex-basis: 100%; order: 3; }
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>🎧 Echo</h1>
-        
-        <div class="search-box">
-            <input type="text" id="searchInput" placeholder="Search topics (e.g., AGI timeline, Tesla, metaverse)">
-            <button onclick="search()">Search</button>
-        </div>
-        
-        <div id="error" class="error" style="display: none;"></div>
-        
-        <div class="player-section">
-            <div class="now-playing">
-                <h3 id="nowPlaying">Select a segment to play</h3>
-                <p id="nowPlayingMeta"></p>
+    <!-- Navigation -->
+    <nav class="nav">
+        <div class="nav-brand">🎧 Echo</div>
+        <div class="nav-tab active" data-page="dashboard">Dashboard</div>
+        <div class="nav-tab" data-page="library">Library</div>
+        <div class="nav-tab" data-page="ingest">Ingest</div>
+        <div class="nav-tab" data-page="player">Player</div>
+    </nav>
+
+    <!-- ═══════════════════ DASHBOARD ═══════════════════ -->
+    <div id="page-dashboard" class="page active">
+        <h1 class="page-title">Dashboard</h1>
+        <div class="stat-grid" id="stats">
+            <div class="card">
+                <div class="card-title">Segments</div>
+                <div class="card-value" id="stat-segments">—</div>
             </div>
-            <audio id="audioPlayer" controls>
-                Your browser does not support audio.
-            </audio>
-            <div id="progressInfo" class="progress-info"></div>
-            <div id="status" class="status"></div>
+            <div class="card">
+                <div class="card-title">Episodes</div>
+                <div class="card-value" id="stat-episodes">—</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Podcasts</div>
+                <div class="card-value" id="stat-podcasts">—</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Total Audio</div>
+                <div class="card-value" id="stat-duration">—</div>
+            </div>
         </div>
-        
-        <div class="playlist">
-            <h2 id="playlistTitle">Playlist</h2>
-            <div id="segments">
-                <div class="loading">Search for a topic to get started</div>
+
+        <div class="card">
+            <div class="card-title">Podcasts in Library</div>
+            <div id="dashboard-podcasts" style="margin-top: 12px;">
+                <div class="empty-state" style="padding: 30px;">
+                    <div class="spinner"></div>
+                    <p style="margin-top: 10px;">Loading...</p>
+                </div>
             </div>
         </div>
     </div>
-    
+
+    <!-- ═══════════════════ LIBRARY ═══════════════════ -->
+    <div id="page-library" class="page">
+        <div id="library-breadcrumb" class="breadcrumb"></div>
+        <h1 class="page-title" id="library-title">Library</h1>
+        <div id="library-content">
+            <div class="empty-state">
+                <div class="spinner"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════ INGEST ═══════════════════ -->
+    <div id="page-ingest" class="page">
+        <h1 class="page-title">Ingest Content</h1>
+
+        <!-- Single URL -->
+        <div class="card">
+            <div class="card-title">Add YouTube Video</div>
+            <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px;">
+                Paste a YouTube URL to extract captions, download audio, and index the content.
+            </p>
+            <div class="input-row">
+                <input type="text" id="ingest-url" placeholder="https://www.youtube.com/watch?v=...">
+                <input type="text" id="ingest-podcast-name" placeholder="Podcast name (optional)" style="max-width: 220px;">
+                <button class="btn btn-primary" onclick="ingestURL()">Ingest</button>
+            </div>
+        </div>
+
+        <!-- Channel batch -->
+        <div class="card">
+            <div class="card-title">Batch Ingest Channel</div>
+            <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px;">
+                Select a curated podcast or enter a YouTube channel handle to ingest multiple episodes.
+            </p>
+            <div class="podcast-grid" id="curated-podcasts"></div>
+            <div style="margin-top: 16px;">
+                <div class="input-row">
+                    <input type="text" id="ingest-channel" placeholder="@channel_handle">
+                    <input type="number" id="ingest-limit" value="10" min="1" max="100" style="max-width: 100px;">
+                    <button class="btn btn-primary" onclick="ingestChannel()">Ingest Channel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Jobs -->
+        <div class="card">
+            <div class="card-title">Ingestion Jobs</div>
+            <div id="ingest-jobs" style="margin-top: 12px;">
+                <div class="empty-state" style="padding: 20px;">
+                    <p>No active jobs</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════ PLAYER ═══════════════════ -->
+    <div id="page-player" class="page">
+        <h1 class="page-title">Search & Play</h1>
+        <div class="input-row">
+            <input type="text" id="search-input" placeholder="Search topics (e.g., AI safety, stoicism, longevity, Tesla)">
+            <button class="btn btn-primary" onclick="searchTopics()">Search</button>
+        </div>
+        <div id="search-results">
+            <div class="empty-state">
+                <div class="icon">🔍</div>
+                <h3>Search for a topic</h3>
+                <p>Find relevant segments across all your ingested podcasts</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══════════════════ PLAYER BAR ═══════════════════ -->
+    <div class="player-bar" id="player-bar">
+        <div class="player-controls">
+            <button onclick="prevSegment()" title="Previous">⏮</button>
+            <button onclick="togglePlay()" id="play-btn" title="Play/Pause">▶</button>
+            <button onclick="nextSegment()" title="Next">⏭</button>
+        </div>
+        <div class="player-info">
+            <div class="player-title" id="player-title">—</div>
+            <div class="player-meta" id="player-meta">—</div>
+        </div>
+        <div class="player-progress">
+            <span id="player-time-current">0:00</span>
+            <div class="progress-bar" onclick="seekProgress(event)">
+                <div class="progress-fill" id="player-progress-fill"></div>
+            </div>
+            <span id="player-time-remaining">0:00</span>
+        </div>
+    </div>
+    <audio id="audio-el"></audio>
+
     <script>
-        const API_BASE = '';
-        let currentPlaylist = null;
-        let currentIndex = 0;
-        let segmentEndTime = 0;
-        let isTransitioning = false;
-        
-        const audio = document.getElementById('audioPlayer');
-        const status = document.getElementById('status');
-        const progressInfo = document.getElementById('progressInfo');
-        
-        function log(msg) {
-            console.log(msg);
-            status.textContent = msg;
-        }
-        
-        async function search() {
-            const query = document.getElementById('searchInput').value.trim();
-            if (!query) return;
-            
-            document.getElementById('segments').innerHTML = '<div class="loading">Searching...</div>';
-            document.getElementById('error').style.display = 'none';
-            
-            try {
-                const response = await fetch(`${API_BASE}/playlists/topic/${encodeURIComponent(query)}?limit=10`);
-                if (!response.ok) throw new Error('No results found');
-                
-                currentPlaylist = await response.json();
-                currentIndex = 0;
-                log(`Found ${currentPlaylist.segments.length} segments`);
-                renderPlaylist();
-            } catch (err) {
-                document.getElementById('error').textContent = err.message;
-                document.getElementById('error').style.display = 'block';
-                document.getElementById('segments').innerHTML = '<div class="loading">No results</div>';
+    // ═══════════════════ STATE ═══════════════════
+    const API = '';
+    let playlist = null;
+    let playIndex = 0;
+    let segEndTime = 0;
+    let transitioning = false;
+    const audio = document.getElementById('audio-el');
+
+    // ═══════════════════ NAVIGATION ═══════════════════
+    document.querySelectorAll('.nav-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            tab.classList.add('active');
+            document.getElementById('page-' + tab.dataset.page).classList.add('active');
+
+            // Load data for page
+            if (tab.dataset.page === 'dashboard') loadDashboard();
+            if (tab.dataset.page === 'library') loadLibrary();
+            if (tab.dataset.page === 'ingest') loadIngestPage();
+        });
+    });
+
+    // ═══════════════════ HELPERS ═══════════════════
+    function fmt(ms) {
+        const sec = Math.floor(ms / 1000);
+        const m = Math.floor(sec / 60);
+        const s = sec % 60;
+        return `${m}:${s.toString().padStart(2, '0')}`;
+    }
+    function fmtDuration(ms) {
+        const hrs = Math.floor(ms / 3600000);
+        const mins = Math.floor((ms % 3600000) / 60000);
+        if (hrs > 0) return `${hrs}h ${mins}m`;
+        return `${mins}m`;
+    }
+    function fmtDurationShort(ms) {
+        const hrs = Math.floor(ms / 3600000);
+        if (hrs > 0) return `${hrs}h`;
+        return `${Math.floor(ms / 60000)}m`;
+    }
+    async function api(path, opts) {
+        const r = await fetch(API + path, opts);
+        if (!r.ok) throw new Error(`API error: ${r.status}`);
+        return r.json();
+    }
+
+    // ═══════════════════ DASHBOARD ═══════════════════
+    async function loadDashboard() {
+        try {
+            const data = await api('/library/overview');
+            document.getElementById('stat-segments').textContent = data.total_segments.toLocaleString();
+            document.getElementById('stat-episodes').textContent = data.total_episodes.toLocaleString();
+            document.getElementById('stat-podcasts').textContent = data.total_podcasts.toLocaleString();
+
+            const totalMs = data.podcasts.reduce((a, p) => a + p.total_duration_ms, 0);
+            document.getElementById('stat-duration').textContent = fmtDuration(totalMs);
+
+            const el = document.getElementById('dashboard-podcasts');
+            if (!data.podcasts.length) {
+                el.innerHTML = `<div class="empty-state" style="padding:30px">
+                    <div class="icon">📭</div>
+                    <h3>No content yet</h3>
+                    <p>Go to the Ingest tab to add podcasts</p>
+                </div>`;
+                return;
             }
-        }
-        
-        function renderPlaylist() {
-            if (!currentPlaylist?.segments?.length) return;
-            
-            document.getElementById('playlistTitle').textContent = currentPlaylist.title;
-            
-            document.getElementById('segments').innerHTML = currentPlaylist.segments.map((seg, i) => `
-                <div class="segment ${i === currentIndex ? 'active' : ''}" onclick="playSegment(${i})">
-                    <div class="segment-title">${seg.episode_title}</div>
-                    <div class="segment-meta">
-                        ${seg.podcast_title} • ${formatDuration(seg.end_time_ms - seg.start_time_ms)} • Starts at ${formatTime(seg.start_time_ms)}
+            el.innerHTML = data.podcasts.map(p => `
+                <div class="list-item" onclick="navigateToLibraryPodcast('${esc(p.name)}')">
+                    <div>
+                        <div class="list-item-title">${esc(p.name)}</div>
+                        <div class="list-item-meta">${p.episode_count} episode${p.episode_count !== 1 ? 's' : ''} · ${p.segment_count} segments · ${fmtDuration(p.total_duration_ms)}</div>
                     </div>
-                    <div class="segment-summary">${seg.preroll_text}</div>
-                    <div class="tags">${seg.topic_tags.map(t => `<span class="tag">${t}</span>`).join('')}</div>
+                    <div class="list-item-right">
+                        <span class="list-item-badge badge-info">${p.segment_count}</span>
+                    </div>
                 </div>
             `).join('');
+        } catch (e) {
+            console.error('Dashboard load failed:', e);
+            document.getElementById('stat-segments').textContent = '—';
         }
-        
-        function playSegment(index) {
-            if (!currentPlaylist || index >= currentPlaylist.segments.length || isTransitioning) return;
-            
-            isTransitioning = true;
-            currentIndex = index;
-            const seg = currentPlaylist.segments[index];
-            
-            const startSec = seg.start_time_ms / 1000;
-            segmentEndTime = seg.end_time_ms / 1000;
-            
-            // Update UI
-            document.getElementById('nowPlaying').textContent = seg.episode_title;
-            document.getElementById('nowPlayingMeta').textContent = 
-                `${seg.podcast_title} • ${formatTime(seg.start_time_ms)} → ${formatTime(seg.end_time_ms)}`;
-            
-            renderPlaylist();
-            log(`Loading segment ${index + 1}/${currentPlaylist.segments.length}...`);
-            
-            // Stop current playback
-            audio.pause();
-            
-            // Set new source and wait for it to be ready
-            audio.src = seg.source_url;
-            
-            audio.onloadedmetadata = function() {
-                log(`Seeking to ${formatTime(seg.start_time_ms)}...`);
-                audio.currentTime = startSec;
-            };
-            
-            audio.onseeked = function() {
-                isTransitioning = false;
-                log(`Playing segment ${index + 1}`);
-                audio.play().catch(e => {
-                    log('Click play to start');
-                });
-            };
-            
-            audio.onerror = function() {
-                isTransitioning = false;
-                log('Error loading audio: ' + (audio.error?.message || 'Unknown'));
-            };
-        }
-        
-        // Monitor playback progress
-        audio.addEventListener('timeupdate', function() {
-            if (isTransitioning || !currentPlaylist) return;
-            
-            const current = audio.currentTime;
-            const seg = currentPlaylist.segments[currentIndex];
-            const startSec = seg.start_time_ms / 1000;
-            const remaining = segmentEndTime - current;
-            
-            progressInfo.textContent = `Segment: ${formatTime(current * 1000)} / ${formatTime(segmentEndTime * 1000)} (${Math.max(0, remaining).toFixed(0)}s remaining)`;
-            
-            // Check if segment ended
-            if (current >= segmentEndTime && !isTransitioning) {
-                if (currentIndex < currentPlaylist.segments.length - 1) {
-                    log('Segment complete, loading next...');
-                    playSegment(currentIndex + 1);
-                } else {
-                    audio.pause();
-                    log('Playlist complete!');
-                    progressInfo.textContent = 'All segments played';
-                }
+    }
+
+    function navigateToLibraryPodcast(name) {
+        document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+        document.querySelector('[data-page="library"]').classList.add('active');
+        document.getElementById('page-library').classList.add('active');
+        loadLibraryEpisodes(name);
+    }
+
+    // ═══════════════════ LIBRARY ═══════════════════
+    let libraryView = 'podcasts'; // podcasts | episodes | segments
+
+    async function loadLibrary() {
+        libraryView = 'podcasts';
+        document.getElementById('library-breadcrumb').innerHTML = '';
+        document.getElementById('library-title').textContent = 'Library';
+        const el = document.getElementById('library-content');
+        el.innerHTML = '<div style="text-align:center;padding:30px"><div class="spinner"></div></div>';
+
+        try {
+            const data = await api('/library/overview');
+            if (!data.podcasts.length) {
+                el.innerHTML = `<div class="empty-state">
+                    <div class="icon">📚</div>
+                    <h3>Library is empty</h3>
+                    <p>Ingest some podcasts to see them here</p>
+                </div>`;
+                return;
             }
-        });
-        
-        function formatDuration(ms) {
-            const mins = Math.floor(ms / 60000);
-            const secs = Math.floor((ms % 60000) / 1000);
-            return `${mins}:${secs.toString().padStart(2, '0')}`;
+            el.innerHTML = data.podcasts.map(p => `
+                <div class="list-item" onclick="loadLibraryEpisodes('${esc(p.name)}')">
+                    <div>
+                        <div class="list-item-title">${esc(p.name)}</div>
+                        <div class="list-item-meta">${p.episode_count} episode${p.episode_count !== 1 ? 's' : ''} · ${p.segment_count} segments · ${fmtDuration(p.total_duration_ms)}</div>
+                    </div>
+                    <div class="list-item-right" style="display:flex;gap:8px;align-items:center">
+                        <span class="list-item-badge badge-info">${p.segment_count} seg</span>
+                        <span style="color:var(--text-muted)">▶</span>
+                    </div>
+                </div>
+            `).join('');
+        } catch (e) {
+            el.innerHTML = `<div class="empty-state"><p>Failed to load library</p></div>`;
         }
-        
-        function formatTime(ms) {
-            const totalSec = Math.floor(ms / 1000);
-            const mins = Math.floor(totalSec / 60);
-            const secs = totalSec % 60;
-            return `${mins}m ${secs}s`;
+    }
+
+    async function loadLibraryEpisodes(podcastName) {
+        libraryView = 'episodes';
+        document.getElementById('library-breadcrumb').innerHTML = `
+            <a onclick="loadLibrary()">Library</a> <span>›</span> <span>${esc(podcastName)}</span>
+        `;
+        document.getElementById('library-title').textContent = podcastName;
+        const el = document.getElementById('library-content');
+        el.innerHTML = '<div style="text-align:center;padding:30px"><div class="spinner"></div></div>';
+
+        try {
+            const data = await api(`/library/podcasts/${encodeURIComponent(podcastName)}/episodes`);
+            el.innerHTML = data.episodes.map(ep => `
+                <div class="list-item" onclick="loadLibrarySegments('${esc(ep.episode_id)}')">
+                    <div>
+                        <div class="list-item-title">${esc(ep.title)}</div>
+                        <div class="list-item-meta">${ep.segment_count} segments · ${fmtDuration(ep.total_duration_ms)} · Source: ${ep.source}</div>
+                    </div>
+                    <div class="list-item-right" style="display:flex;gap:8px;align-items:center">
+                        <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deleteEpisode('${esc(ep.episode_id)}','${esc(podcastName)}')" title="Delete">🗑</button>
+                        <span style="color:var(--text-muted)">▶</span>
+                    </div>
+                </div>
+            `).join('');
+        } catch (e) {
+            el.innerHTML = `<div class="empty-state"><p>Failed to load episodes</p></div>`;
         }
-        
-        document.getElementById('searchInput').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') search();
+    }
+
+    async function loadLibrarySegments(episodeId) {
+        libraryView = 'segments';
+        const el = document.getElementById('library-content');
+        el.innerHTML = '<div style="text-align:center;padding:30px"><div class="spinner"></div></div>';
+
+        try {
+            const data = await api(`/library/episodes/${encodeURIComponent(episodeId)}/segments`);
+            document.getElementById('library-breadcrumb').innerHTML = `
+                <a onclick="loadLibrary()">Library</a> <span>›</span>
+                <a onclick="loadLibraryEpisodes('${esc(data.podcast_title)}')">${esc(data.podcast_title)}</a>
+                <span>›</span> <span>${esc(data.episode_title)}</span>
+            `;
+            document.getElementById('library-title').textContent = data.episode_title;
+
+            el.innerHTML = `
+                <p style="margin-bottom:16px;color:var(--text-secondary)">${data.segment_count} segments · Click to play</p>
+                ${data.segments.map((s, i) => `
+                    <div class="segment-card" onclick="playLibrarySegments(${JSON.stringify(data.segments).split("'").join("\\'")}', ${i})">
+                        <div class="seg-meta">${fmt(s.start_ms)} → ${fmt(s.end_ms)} · ${fmtDuration(s.end_ms - s.start_ms)}</div>
+                        <div class="seg-text">${esc(s.text.substring(0, 250))}${s.text.length > 250 ? '...' : ''}</div>
+                    </div>
+                `).join('')}
+            `;
+
+            // Fix: store segments globally and use index
+            window._libSegments = data.segments;
+            el.innerHTML = `
+                <p style="margin-bottom:16px;color:var(--text-secondary)">${data.segment_count} segments · Click any to play</p>
+                ${data.segments.map((s, i) => `
+                    <div class="segment-card" onclick="playLibrarySegment(${i})">
+                        <div class="seg-meta">${fmt(s.start_ms)} → ${fmt(s.end_ms)} · ${fmtDuration(s.end_ms - s.start_ms)}</div>
+                        <div class="seg-text">${esc(s.text.substring(0, 300))}${s.text.length > 300 ? '...' : ''}</div>
+                    </div>
+                `).join('')}
+            `;
+        } catch (e) {
+            el.innerHTML = `<div class="empty-state"><p>Failed to load segments</p></div>`;
+        }
+    }
+
+    function playLibrarySegment(index) {
+        const segs = window._libSegments;
+        if (!segs) return;
+        // Convert to playlist format
+        playlist = {
+            title: 'Episode Playback',
+            segments: segs.map(s => ({
+                segment_id: s.segment_id,
+                source_url: s.audio_url,
+                start_time_ms: s.start_ms,
+                end_time_ms: s.end_ms,
+                preroll_text: s.summary || s.text.substring(0, 150),
+                topic_tags: [],
+                podcast_title: s.podcast_title,
+                episode_title: s.episode_title,
+            }))
+        };
+        playSegment(index);
+    }
+
+    async function deleteEpisode(episodeId, podcastName) {
+        if (!confirm('Delete this episode and all its segments?')) return;
+        try {
+            await api(`/library/episodes/${encodeURIComponent(episodeId)}`, { method: 'DELETE' });
+            loadLibraryEpisodes(podcastName);
+        } catch (e) {
+            alert('Delete failed: ' + e.message);
+        }
+    }
+
+    // ═══════════════════ INGEST ═══════════════════
+    async function loadIngestPage() {
+        // Load curated podcasts
+        try {
+            const data = await api('/ingest/youtube/podcasts');
+            const el = document.getElementById('curated-podcasts');
+            el.innerHTML = data.podcasts.map(p => `
+                <div class="podcast-card" onclick="selectPodcast('${esc(p.channel)}', '${esc(p.name)}')">
+                    <div class="pc-name">${esc(p.name)}</div>
+                    <div class="pc-desc">${esc(p.description)}</div>
+                    <div class="pc-handle">${esc(p.channel)}</div>
+                </div>
+            `).join('');
+        } catch (e) {
+            console.error('Failed to load curated podcasts:', e);
+        }
+        refreshJobs();
+    }
+
+    function selectPodcast(channel, name) {
+        document.getElementById('ingest-channel').value = channel;
+        document.getElementById('ingest-podcast-name').value = name;
+        // Scroll to the input
+        document.getElementById('ingest-channel').focus();
+    }
+
+    async function ingestURL() {
+        const url = document.getElementById('ingest-url').value.trim();
+        if (!url) return;
+        const name = document.getElementById('ingest-podcast-name').value.trim() || undefined;
+
+        try {
+            const r = await api('/ingest/youtube/url', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url, podcast_name: name }),
+            });
+            document.getElementById('ingest-url').value = '';
+            refreshJobs();
+        } catch (e) {
+            alert('Failed to start ingestion: ' + e.message);
+        }
+    }
+
+    async function ingestChannel() {
+        const channel = document.getElementById('ingest-channel').value.trim();
+        if (!channel) return;
+        const limit = parseInt(document.getElementById('ingest-limit').value) || 10;
+        const name = document.getElementById('ingest-podcast-name').value.trim() || undefined;
+
+        try {
+            await api('/ingest/youtube/channel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ channel, podcast_name: name, limit }),
+            });
+            document.getElementById('ingest-channel').value = '';
+            refreshJobs();
+        } catch (e) {
+            alert('Failed to start channel ingestion: ' + e.message);
+        }
+    }
+
+    let jobRefreshInterval = null;
+
+    async function refreshJobs() {
+        try {
+            const data = await api('/ingest/youtube/jobs');
+            const el = document.getElementById('ingest-jobs');
+
+            if (!data.jobs.length) {
+                el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">No ingestion jobs</div>';
+                if (jobRefreshInterval) { clearInterval(jobRefreshInterval); jobRefreshInterval = null; }
+                return;
+            }
+
+            const hasActive = data.jobs.some(j => !['complete','failed','skipped'].includes(j.status));
+            if (hasActive && !jobRefreshInterval) {
+                jobRefreshInterval = setInterval(refreshJobs, 3000);
+            } else if (!hasActive && jobRefreshInterval) {
+                clearInterval(jobRefreshInterval);
+                jobRefreshInterval = null;
+            }
+
+            el.innerHTML = data.jobs.map(j => renderJob(j)).join('');
+        } catch (e) {
+            console.error('Job refresh failed:', e);
+        }
+    }
+
+    function renderJob(j) {
+        const statusMap = {
+            queued: ['⏳', 'Queued', 'badge-warning'],
+            fetching_info: ['🔍', 'Fetching info...', 'badge-info'],
+            extracting_captions: ['📝', 'Extracting captions...', 'badge-info'],
+            downloading_audio: ['⬇️', 'Downloading audio...', 'badge-info'],
+            indexing: ['📊', 'Indexing...', 'badge-info'],
+            listing_videos: ['📋', 'Listing videos...', 'badge-info'],
+            ingesting: ['🔄', 'Ingesting...', 'badge-info'],
+            complete: ['✅', 'Complete', 'badge-success'],
+            failed: ['❌', 'Failed', 'badge-danger'],
+            skipped: ['⏭️', 'Skipped (already exists)', 'badge-warning'],
+        };
+        const [icon, label, badge] = statusMap[j.status] || ['❓', j.status, 'badge-info'];
+
+        let details = '';
+        if (j.title) details += `<div style="margin-top:6px;font-size:14px">${esc(j.title)}</div>`;
+        if (j.error) details += `<div style="margin-top:6px;color:var(--danger);font-size:13px">${esc(j.error)}</div>`;
+        if (j.chunks_created) details += `<div style="margin-top:4px;font-size:13px;color:var(--text-secondary)">${j.chunks_created} chunks indexed</div>`;
+
+        // Channel progress
+        if (j.type === 'channel' && j.total_videos) {
+            const done = j.current_video || 0;
+            const pct = Math.round((done / j.total_videos) * 100);
+            details += `
+                <div class="job-progress">
+                    <span style="font-size:13px;color:var(--text-secondary)">${done} / ${j.total_videos} videos</span>
+                    <div class="job-progress-bar"><div class="job-progress-fill" style="width:${pct}%"></div></div>
+                </div>
+            `;
+            if (j.videos && j.videos.length) {
+                const recent = j.videos.slice(-5).reverse();
+                details += `<div class="job-videos">${recent.map(v => `
+                    <div class="job-video">
+                        <span>${esc((v.title || '').substring(0, 50))}</span>
+                        <span class="list-item-badge ${v.status === 'complete' ? 'badge-success' : v.status === 'skipped' ? 'badge-warning' : v.status === 'failed' || v.status === 'no_captions' ? 'badge-danger' : 'badge-info'}">${v.status}</span>
+                    </div>
+                `).join('')}</div>`;
+            }
+        }
+
+        if (j.success !== undefined) {
+            details += `<div style="margin-top:6px;font-size:13px;color:var(--text-secondary)">✅ ${j.success} success · ⏭️ ${j.skipped} skipped · ❌ ${j.failed} failed</div>`;
+        }
+
+        return `
+            <div class="job-card">
+                <div class="job-header">
+                    <span class="job-title">${icon} ${j.type === 'channel' ? 'Channel: ' + esc(j.channel || '') : esc(j.url || j.title || 'Video')}</span>
+                    <span class="list-item-badge ${badge}">${label}</span>
+                </div>
+                ${details}
+            </div>
+        `;
+    }
+
+    // ═══════════════════ PLAYER / SEARCH ═══════════════════
+    async function searchTopics() {
+        const q = document.getElementById('search-input').value.trim();
+        if (!q) return;
+        const el = document.getElementById('search-results');
+        el.innerHTML = '<div style="text-align:center;padding:30px"><div class="spinner"></div><p style="margin-top:10px;color:var(--text-muted)">Searching...</p></div>';
+
+        try {
+            const data = await api(`/playlists/topic/${encodeURIComponent(q)}?limit=15`);
+            playlist = data;
+            renderSearchResults();
+        } catch (e) {
+            el.innerHTML = `<div class="empty-state">
+                <div class="icon">😕</div>
+                <h3>No results</h3>
+                <p>Try a different search term</p>
+            </div>`;
+        }
+    }
+
+    function renderSearchResults() {
+        if (!playlist?.segments?.length) return;
+        const el = document.getElementById('search-results');
+        el.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <h2 style="font-size:18px">${esc(playlist.title)}</h2>
+                <span style="color:var(--text-muted);font-size:13px">${playlist.segments.length} segments · ${fmtDuration(playlist.total_duration_ms)}</span>
+            </div>
+            ${playlist.segments.map((seg, i) => `
+                <div class="segment-card ${i === playIndex ? 'playing' : ''}" id="seg-${i}" onclick="playSegment(${i})">
+                    <div class="seg-title">${esc(seg.episode_title)}</div>
+                    <div class="seg-meta">
+                        ${esc(seg.podcast_title)} · ${fmtDuration(seg.end_time_ms - seg.start_time_ms)} · Starts at ${fmt(seg.start_time_ms)}
+                    </div>
+                    <div class="seg-text">${esc(seg.preroll_text)}</div>
+                    ${seg.topic_tags?.length ? '<div style="margin-top:6px">' + seg.topic_tags.map(t => `<span class="tag">${esc(t)}</span>`).join('') + '</div>' : ''}
+                </div>
+            `).join('')}
+        `;
+    }
+
+    // ═══════════════════ AUDIO PLAYBACK ═══════════════════
+    function playSegment(index) {
+        if (!playlist || index >= playlist.segments.length || transitioning) return;
+        transitioning = true;
+        playIndex = index;
+        const seg = playlist.segments[index];
+        const startSec = seg.start_time_ms / 1000;
+        segEndTime = seg.end_time_ms / 1000;
+
+        // Update player bar
+        document.getElementById('player-bar').classList.add('active');
+        document.body.classList.add('player-active');
+        document.getElementById('player-title').textContent = seg.episode_title;
+        document.getElementById('player-meta').textContent = `${seg.podcast_title} · ${fmt(seg.start_time_ms)} → ${fmt(seg.end_time_ms)}`;
+        document.getElementById('play-btn').textContent = '⏸';
+
+        // Highlight in list
+        document.querySelectorAll('.segment-card').forEach((c, i) => {
+            c.classList.toggle('playing', i === index);
         });
+
+        audio.pause();
+        audio.src = seg.source_url;
+        audio.onloadedmetadata = () => { audio.currentTime = startSec; };
+        audio.onseeked = () => {
+            transitioning = false;
+            audio.play().catch(() => {});
+        };
+        audio.onerror = () => { transitioning = false; };
+    }
+
+    function togglePlay() {
+        if (audio.paused) {
+            audio.play();
+            document.getElementById('play-btn').textContent = '⏸';
+        } else {
+            audio.pause();
+            document.getElementById('play-btn').textContent = '▶';
+        }
+    }
+
+    function prevSegment() {
+        if (playIndex > 0) playSegment(playIndex - 1);
+    }
+
+    function nextSegment() {
+        if (playlist && playIndex < playlist.segments.length - 1) playSegment(playIndex + 1);
+    }
+
+    function seekProgress(e) {
+        if (!playlist) return;
+        const seg = playlist.segments[playIndex];
+        const startSec = seg.start_time_ms / 1000;
+        const rect = e.currentTarget.getBoundingClientRect();
+        const pct = (e.clientX - rect.left) / rect.width;
+        audio.currentTime = startSec + pct * (segEndTime - startSec);
+    }
+
+    audio.addEventListener('timeupdate', () => {
+        if (transitioning || !playlist) return;
+        const seg = playlist.segments[playIndex];
+        const startSec = seg.start_time_ms / 1000;
+        const current = audio.currentTime;
+        const elapsed = current - startSec;
+        const total = segEndTime - startSec;
+        const remaining = segEndTime - current;
+        const pct = Math.max(0, Math.min(100, (elapsed / total) * 100));
+
+        document.getElementById('player-progress-fill').style.width = pct + '%';
+        document.getElementById('player-time-current').textContent = fmt(Math.max(0, elapsed) * 1000);
+        document.getElementById('player-time-remaining').textContent = '-' + fmt(Math.max(0, remaining) * 1000);
+
+        if (current >= segEndTime && !transitioning) {
+            if (playIndex < playlist.segments.length - 1) {
+                playSegment(playIndex + 1);
+            } else {
+                audio.pause();
+                document.getElementById('play-btn').textContent = '▶';
+            }
+        }
+    });
+
+    audio.addEventListener('pause', () => {
+        document.getElementById('play-btn').textContent = '▶';
+    });
+    audio.addEventListener('play', () => {
+        document.getElementById('play-btn').textContent = '⏸';
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'INPUT') return;
+        if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+        if (e.code === 'ArrowRight') nextSegment();
+        if (e.code === 'ArrowLeft') prevSegment();
+    });
+
+    // ═══════════════════ UTIL ═══════════════════
+    function esc(s) {
+        if (!s) return '';
+        const d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    // Search on Enter
+    document.getElementById('search-input')?.addEventListener('keypress', e => {
+        if (e.key === 'Enter') searchTopics();
+    });
+    document.getElementById('ingest-url')?.addEventListener('keypress', e => {
+        if (e.key === 'Enter') ingestURL();
+    });
+
+    // ═══════════════════ INIT ═══════════════════
+    loadDashboard();
     </script>
 </body>
 </html>

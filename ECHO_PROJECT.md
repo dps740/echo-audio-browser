@@ -105,8 +105,22 @@ Browse podcasts by **topic** rather than episode. Search "AI safety" and get a p
 | ChromaDB data | `~/clawd/projects/echo-audio-browser/chroma_data/` |
 | Git repo | https://github.com/dps740/echo-audio-browser |
 
+## Audio Storage
+- Audio downloads locally via yt-dlp as MP3
+- Server serves from `/audio/` directory (static files)
+- ~50-100 MB per episode, ~20-40 GB for 400 episodes
+- Local = instant seeking, no buffering, no expiring URLs
+- For production: S3/Backblaze (~$0.005/GB/mo → $0.20/mo for 40GB)
+
 ## David's Windows Setup
 - **PC:** Windows desktop with GTX 1050 Ti
 - **Python:** Already installed
 - **GPU use:** faster-whisper for local transcription when YouTube captions unavailable
-- **Package:** Google Drive zip with server + client + README
+- **Package (v4):** https://drive.google.com/file/d/1R13s57cR7DOM6w_vUgrWFa7uWWlVNtHi/view
+
+## Quick Start (David)
+1. Download zip, extract to C:\Echo
+2. `pip install yt-dlp requests fastapi uvicorn chromadb pydantic-settings httpx`
+3. Double-click `start_server.bat`
+4. New cmd: `python echo_batch_ingest.py --channel @lexfridman --limit 5`
+5. Browser: http://localhost:8765/player

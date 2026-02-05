@@ -433,12 +433,16 @@
         <div class="card">
             <div class="card-title">Re-analyze Library</div>
             <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px;">
-                Re-index all existing content with the latest search pipeline (LLM segmentation, key term extraction, OpenAI embeddings). Audio files stay put — only the search index is rebuilt.
+                Re-process all content through the full pipeline. Choose shallow (re-embed only) or deep (full LLM re-segmentation).
             </p>
-            <div style="display: flex; align-items: center; gap: 12px;">
-                <button class="btn btn-primary" onclick="reanalyzeLibrary()" id="reanalyze-btn">🔄 Re-analyze All</button>
+            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                <button class="btn btn-secondary" onclick="reanalyzeLibrary()" id="reanalyze-btn">🔄 Shallow Re-embed</button>
+                <button class="btn btn-primary" onclick="deepReanalyzeLibrary()" id="deep-reanalyze-btn">🧠 Deep Re-analyze</button>
                 <span id="reanalyze-status" style="font-size: 13px; color: var(--text-muted);"></span>
             </div>
+            <p style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">
+                <b>Shallow:</b> Re-embeds existing segments (fast, cheap). <b>Deep:</b> Full LLM re-segmentation — new clip boundaries, summaries, topics (slower, uses OpenAI API).
+            </p>
         </div>
 
         <!-- Jobs -->
@@ -778,6 +782,34 @@
         }
     }
 
+    async function deepReanalyzeLibrary() {
+        const btn = document.getElementById('deep-reanalyze-btn');
+        const status = document.getElementById('reanalyze-status');
+        
+        if (!confirm('Deep re-analyze will re-run LLM segmentation on ALL content. This creates new clip boundaries and uses OpenAI API credits. Continue?')) return;
+        
+        btn.disabled = true;
+        btn.textContent = '⏳ Starting...';
+        status.textContent = '';
+
+        try {
+            const r = await api('/ingest/youtube/deep-reindex', { method: 'POST' });
+            status.textContent = 'Deep re-analysis started! Check jobs below for progress.';
+            status.style.color = 'var(--success)';
+            btn.textContent = '✅ Started';
+            refreshJobs();
+            setTimeout(() => {
+                btn.disabled = false;
+                btn.textContent = '🧠 Deep Re-analyze';
+            }, 5000);
+        } catch (e) {
+            status.textContent = 'Failed: ' + e.message;
+            status.style.color = '#f87171';
+            btn.disabled = false;
+            btn.textContent = '🧠 Deep Re-analyze';
+        }
+    }
+
     async function ingestURL() {
         const url = document.getElementById('ingest-url').value.trim();
         if (!url) return;
@@ -869,9 +901,12 @@
         if (j.type === 'reindex' && j.total_segments) {
             const done = j.processed || 0;
             const pct = Math.round((done / j.total_segments) * 100);
+            const label = j.deep 
+                ? `${j.processed_episodes || 0} / ${j.total_episodes || '?'} episodes · ${done} segments created`
+                : `${done} / ${j.total_segments} segments re-analyzed`;
             details += `
                 <div class="job-progress">
-                    <span style="font-size:13px;color:var(--text-secondary)">${done} / ${j.total_segments} segments re-analyzed</span>
+                    <span style="font-size:13px;color:var(--text-secondary)">${label}</span>
                     <div class="job-progress-bar"><div class="job-progress-fill" style="width:${pct}%"></div></div>
                 </div>
             `;

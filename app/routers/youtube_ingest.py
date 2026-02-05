@@ -588,6 +588,217 @@ async def clear_job(job_id: str):
     return {"status": "cleared"}
 
 
+@router.post("/deep-reindex")
+async def deep_reindex_all(background_tasks: BackgroundTasks):
+    """
+    Deep re-analyze: re-runs full LLM segmentation pipeline on all content.
+    This creates NEW segment boundaries (not just re-embedding existing ones).
+    
+    Pipeline per episode:
+    1. Reconstruct transcript from existing segments
+    2. Re-run LLM segmentation (new boundaries, summaries, topic tags, density)
+    3. Extract key terms per segment
+    4. Build enriched documents + re-embed
+    """
+    global _job_counter
+    _job_counter += 1
+    job_id = f"deep_reindex_{_job_counter}_{int(time.time())}"
+    
+    _jobs[job_id] = {
+        "job_id": job_id,
+        "type": "reindex",
+        "status": "queued",
+        "created_at": datetime.utcnow().isoformat(),
+        "deep": True,
+    }
+    
+    background_tasks.add_task(_deep_reindex_all_segments, job_id)
+    
+    return {"job_id": job_id, "status": "queued", "message": "Deep re-analysis: full LLM re-segmentation of all content"}
+
+
+def _deep_reindex_all_segments(job_id: str):
+    """Background task: full LLM re-segmentation of all content."""
+    import chromadb
+    from app.config import get_embedding_function
+    from app.services.segmentation import segment_transcript, SegmentResult
+    from app.services.transcription import TranscriptResult, TranscriptWord
+    
+    try:
+        _jobs[job_id]["status"] = "loading_segments"
+        
+        client = chromadb.PersistentClient(path="./chroma_data")
+        embedding_fn = get_embedding_function()
+        
+        collection = client.get_or_create_collection(
+            "segments",
+            embedding_function=embedding_fn
+        )
+        
+        # Get all segments
+        all_results = collection.get(include=["metadatas", "documents"])
+        
+        if not all_results["ids"]:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = "No segments found"
+            return
+        
+        # Group by episode
+        episodes = {}
+        for seg_id, meta, doc in zip(all_results["ids"], all_results["metadatas"], all_results["documents"]):
+            episode_id = meta.get("episode_id", "unknown")
+            if episode_id not in episodes:
+                episodes[episode_id] = {
+                    "title": meta.get("episode_title", "Unknown"),
+                    "podcast": meta.get("podcast_title", "Unknown"),
+                    "audio_url": meta.get("audio_url", ""),
+                    "source": meta.get("source", "youtube"),
+                    "segments": []
+                }
+            episodes[episode_id]["segments"].append({
+                "id": seg_id,
+                "meta": meta,
+                "doc": doc,
+                "start_ms": meta.get("start_ms", 0),
+                "end_ms": meta.get("end_ms", 0),
+            })
+        
+        total_episodes = len(episodes)
+        total_segments = len(all_results["ids"])
+        _jobs[job_id]["total_segments"] = total_segments
+        _jobs[job_id]["total_episodes"] = total_episodes
+        _jobs[job_id]["status"] = "reprocessing"
+        
+        processed_episodes = 0
+        processed_segments = 0
+        
+        for episode_id, ep_data in episodes.items():
+            try:
+                # Sort segments by start time
+                ep_data["segments"].sort(key=lambda s: s["start_ms"])
+                
+                # Reconstruct transcript from existing segments
+                transcript_words = []
+                for seg in ep_data["segments"]:
+                    doc = seg["doc"]
+                    
+                    # Extract transcript text from enriched format or raw
+                    if "TRANSCRIPT:" in doc:
+                        text = doc.split("TRANSCRIPT:")[-1].strip()
+                    else:
+                        text = doc
+                    
+                    # Create word entries (each segment becomes a "word" with timestamps)
+                    # Split into ~30-second chunks for better LLM granularity
+                    seg_duration = seg["end_ms"] - seg["start_ms"]
+                    words_in_seg = text.split()
+                    
+                    if not words_in_seg:
+                        continue
+                    
+                    # Split text into chunks of ~100 words (~30 seconds of speech)
+                    chunk_size = 100
+                    chunks = []
+                    for ci in range(0, len(words_in_seg), chunk_size):
+                        chunk_words = words_in_seg[ci:ci + chunk_size]
+                        chunks.append(" ".join(chunk_words))
+                    
+                    # Distribute timestamps across chunks
+                    chunk_duration = seg_duration / len(chunks) if chunks else seg_duration
+                    for ci, chunk in enumerate(chunks):
+                        chunk_start = seg["start_ms"] + int(ci * chunk_duration)
+                        chunk_end = seg["start_ms"] + int((ci + 1) * chunk_duration)
+                        transcript_words.append(TranscriptWord(
+                            word=chunk,
+                            start_ms=chunk_start,
+                            end_ms=chunk_end,
+                            confidence=1.0
+                        ))
+                
+                if not transcript_words:
+                    continue
+                
+                full_text = " ".join(w.word for w in transcript_words)
+                transcript = TranscriptResult(
+                    text=full_text,
+                    words=transcript_words,
+                    duration_ms=transcript_words[-1].end_ms if transcript_words else 0,
+                    speakers=[]
+                )
+                
+                # Run LLM segmentation
+                import asyncio
+                try:
+                    new_segments = asyncio.run(segment_transcript(transcript, ep_data["title"]))
+                except Exception as e:
+                    print(f"LLM segmentation failed for {episode_id}: {e}, skipping")
+                    continue
+                
+                # Delete old segments for this episode
+                old_ids = [s["id"] for s in ep_data["segments"]]
+                collection.delete(ids=old_ids)
+                
+                # Create new segments with enrichment
+                ids, docs, metas = [], [], []
+                
+                for i, seg in enumerate(new_segments):
+                    key_terms = _extract_key_terms(seg.transcript_text, seg.summary)
+                    
+                    enriched_doc = f"""TOPIC: {', '.join(seg.topic_tags)}
+SUMMARY: {seg.summary}
+KEY TERMS: {', '.join(key_terms)}
+TRANSCRIPT: {seg.transcript_text[:2000]}"""
+                    
+                    ids.append(f"{episode_id}_{i}")
+                    docs.append(enriched_doc)
+                    metas.append({
+                        "episode_id": episode_id,
+                        "episode_title": ep_data["title"],
+                        "podcast_title": ep_data["podcast"],
+                        "audio_url": ep_data["audio_url"],
+                        "start_ms": seg.start_ms,
+                        "end_ms": seg.end_ms,
+                        "summary": seg.summary,
+                        "topic_tags": ",".join(seg.topic_tags),
+                        "key_terms": ",".join(key_terms),
+                        "density_score": seg.density_score,
+                        "source": ep_data["source"],
+                    })
+                
+                # Upsert new segments
+                batch_size = 50
+                for j in range(0, len(ids), batch_size):
+                    collection.upsert(
+                        ids=ids[j:j+batch_size],
+                        documents=docs[j:j+batch_size],
+                        metadatas=metas[j:j+batch_size]
+                    )
+                
+                processed_episodes += 1
+                processed_segments += len(new_segments)
+                _jobs[job_id]["processed"] = processed_segments
+                _jobs[job_id]["processed_episodes"] = processed_episodes
+                
+                time.sleep(1)  # Rate limit between episodes
+                
+            except Exception as e:
+                print(f"Failed to deep reindex episode {episode_id}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+        
+        _jobs[job_id]["status"] = "complete"
+        _jobs[job_id]["completed_at"] = datetime.utcnow().isoformat()
+        _jobs[job_id]["processed"] = processed_segments
+        _jobs[job_id]["processed_episodes"] = processed_episodes
+        _jobs[job_id]["old_segments"] = total_segments
+        _jobs[job_id]["new_segments"] = processed_segments
+        
+    except Exception as e:
+        _jobs[job_id]["status"] = "failed"
+        _jobs[job_id]["error"] = str(e)[:300]
+
+
 @router.post("/repair")
 async def repair_collection():
     """

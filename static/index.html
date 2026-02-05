@@ -758,7 +758,7 @@
         status.textContent = '';
 
         try {
-            const r = await api('/ingest/reindex', {
+            const r = await api('/ingest/youtube/reindex', {
                 method: 'POST',
             });
             status.textContent = 'Re-analysis started! Check jobs below for progress.';

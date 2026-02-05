@@ -923,12 +923,27 @@
 
         audio.pause();
         audio.src = seg.source_url;
-        audio.onloadedmetadata = () => { audio.currentTime = startSec; };
-        audio.onseeked = () => {
-            transitioning = false;
-            audio.play().catch(() => {});
+        audio.load();
+        audio.onloadedmetadata = () => {
+            console.log(`Audio loaded, seeking to ${startSec}s`);
+            audio.currentTime = startSec;
         };
-        audio.onerror = () => { transitioning = false; };
+        audio.oncanplay = () => {
+            console.log('Audio can play, starting...');
+            audio.play().then(() => {
+                transitioning = false;
+                document.getElementById('play-btn').textContent = '⏸';
+            }).catch(e => {
+                console.error('Autoplay blocked:', e);
+                transitioning = false;
+                document.getElementById('play-btn').textContent = '▶';
+            });
+            audio.oncanplay = null;  // Only fire once
+        };
+        audio.onerror = (e) => {
+            console.error('Audio error:', audio.error);
+            transitioning = false;
+        };
     }
 
     function togglePlay() {

@@ -15,5 +15,7 @@ echo   Keep this window open!
 echo   Open a new cmd window to add podcasts.
 echo ============================================
 echo.
+echo Opening browser...
+start http://localhost:8765/player
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
 pause

@@ -86,7 +86,7 @@ class SegmentSearchResult(BaseModel):
 class PlaybackSegment(BaseModel):
     """A segment in a playback manifest."""
     segment_id: str
-    source_url: HttpUrl
+    source_url: str  # Can be HttpUrl or local path like /audio/xxx.mp3
     start_time_ms: int
     end_time_ms: int
     preroll_text: str

@@ -856,7 +856,11 @@ async def repair_collection():
         pass
     
     # Final count
-    report["final_segments_count"] = segments.count()
+    try:
+        segments = client.get_or_create_collection("segments", embedding_function=embedding_fn)
+        report["final_segments_count"] = segments.count()
+    except Exception as e:
+        report["final_segments_count"] = f"error: {e}"
     
     return report
 

@@ -588,6 +588,68 @@ async def clear_job(job_id: str):
     return {"status": "cleared"}
 
 
+@router.post("/repair")
+async def repair_collection():
+    """
+    Repair ChromaDB after a failed reindex swap.
+    If segments_new exists but segments is empty/missing, restore from segments_new.
+    """
+    import chromadb
+    from app.config import get_embedding_function
+    
+    embedding_fn = get_embedding_function()
+    client = chromadb.PersistentClient(path="./chroma_data")
+    
+    report = {"actions": []}
+    
+    # Check current state
+    try:
+        segments = client.get_or_create_collection("segments", embedding_function=embedding_fn)
+        seg_count = segments.count()
+        report["segments_count"] = seg_count
+    except Exception as e:
+        report["segments_error"] = str(e)
+        seg_count = 0
+    
+    # Check for leftover segments_new
+    try:
+        segments_new = client.get_collection("segments_new")
+        new_count = segments_new.count()
+        report["segments_new_count"] = new_count
+        
+        # If segments is empty but segments_new has data, restore
+        if seg_count == 0 and new_count > 0:
+            report["actions"].append(f"Restoring {new_count} segments from segments_new")
+            all_data = segments_new.get(include=["documents", "metadatas"])
+            batch_size = 50
+            for i in range(0, len(all_data["ids"]), batch_size):
+                segments.upsert(
+                    ids=all_data["ids"][i:i+batch_size],
+                    documents=all_data["documents"][i:i+batch_size],
+                    metadatas=all_data["metadatas"][i:i+batch_size]
+                )
+            report["actions"].append(f"Restored {new_count} segments")
+        
+        # Clean up segments_new
+        client.delete_collection("segments_new")
+        report["actions"].append("Deleted segments_new")
+        
+    except Exception:
+        report["segments_new"] = "not found (ok)"
+    
+    # Clean up segments_backup
+    try:
+        client.delete_collection("segments_backup")
+        report["actions"].append("Deleted segments_backup")
+    except Exception:
+        pass
+    
+    # Final count
+    report["final_segments_count"] = segments.count()
+    
+    return report
+
+
 @router.post("/reindex")
 async def reindex_all(background_tasks: BackgroundTasks):
     """
@@ -611,7 +673,12 @@ async def reindex_all(background_tasks: BackgroundTasks):
 
 
 def _reindex_all_segments(job_id: str):
-    """Background task: re-process all ChromaDB segments."""
+    """Background task: re-process all ChromaDB segments in place.
+    
+    Updates documents and metadata directly in the existing collection.
+    No fragile delete/swap needed — ChromaDB upsert recomputes embeddings
+    when documents change.
+    """
     import chromadb
     from app.config import get_embedding_function
     
@@ -621,16 +688,20 @@ def _reindex_all_segments(job_id: str):
         client = chromadb.PersistentClient(path="./chroma_data")
         embedding_fn = get_embedding_function()
         
-        # Get existing collection
-        try:
-            old_collection = client.get_collection("segments")
-        except:
+        # Get existing collection with proper embedding function
+        collection = client.get_or_create_collection(
+            "segments",
+            embedding_function=embedding_fn
+        )
+        
+        count = collection.count()
+        if count == 0:
             _jobs[job_id]["status"] = "failed"
-            _jobs[job_id]["error"] = "No segments collection found"
+            _jobs[job_id]["error"] = "No segments found"
             return
         
         # Get all segments
-        all_results = old_collection.get(include=["metadatas", "documents"])
+        all_results = collection.get(include=["metadatas", "documents"])
         
         if not all_results["ids"]:
             _jobs[job_id]["status"] = "failed"
@@ -649,29 +720,10 @@ def _reindex_all_segments(job_id: str):
                 episodes[episode_id] = []
             episodes[episode_id].append({"id": seg_id, "meta": meta, "doc": doc})
         
-        # Create new collection with embedding function
-        try:
-            client.delete_collection("segments_backup")
-        except:
-            pass
-        
-        # Rename old collection as backup
-        try:
-            # ChromaDB doesn't support rename, so we'll just create new and delete old after
-            pass
-        except:
-            pass
-        
-        new_collection = client.get_or_create_collection(
-            "segments_new",
-            embedding_function=embedding_fn
-        )
-        
         processed = 0
         
         for episode_id, segs in episodes.items():
             try:
-                # Re-process each segment with enrichment
                 ids, docs, metas = [], [], []
                 
                 for seg_data in segs:
@@ -679,7 +731,15 @@ def _reindex_all_segments(job_id: str):
                     old_doc = seg_data["doc"]
                     
                     # Extract transcript from old doc or metadata
-                    transcript = old_doc[:2000] if len(old_doc) > 100 else meta.get("summary", "")
+                    # If old_doc has the enriched format, extract TRANSCRIPT section
+                    transcript = old_doc
+                    if "TRANSCRIPT:" in old_doc:
+                        transcript = old_doc.split("TRANSCRIPT:")[-1].strip()[:2000]
+                    elif len(old_doc) > 100:
+                        transcript = old_doc[:2000]
+                    else:
+                        transcript = meta.get("summary", "")
+                    
                     summary = meta.get("summary", transcript[:200])
                     
                     # Extract key terms
@@ -704,8 +764,8 @@ TRANSCRIPT: {transcript}"""
                     updated_meta["key_terms"] = ",".join(key_terms)
                     metas.append(updated_meta)
                 
-                # Batch upsert
-                new_collection.upsert(
+                # Upsert directly to existing collection (recomputes embeddings)
+                collection.upsert(
                     ids=ids,
                     documents=docs,
                     metadatas=metas
@@ -718,44 +778,15 @@ TRANSCRIPT: {transcript}"""
                 print(f"Failed to reindex episode {episode_id}: {e}")
                 continue
         
-        # Replace old collection with new
-        _jobs[job_id]["status"] = "finalizing"
-        
+        # Clean up any leftover temp collections from previous failed reindexes
+        try:
+            client.delete_collection("segments_new")
+        except:
+            pass
         try:
             client.delete_collection("segments_backup")
         except:
             pass
-        
-        # Backup old, swap in new
-        try:
-            old_collection_data = client.get_collection("segments")
-            # Can't rename in ChromaDB, so delete and rename new
-            client.delete_collection("segments")
-            
-            # Get new collection and "rename" by creating final one
-            new_data = client.get_collection("segments_new")
-            final_collection = client.get_or_create_collection(
-                "segments",
-                embedding_function=embedding_fn
-            )
-            
-            # Copy all data from segments_new to segments
-            all_new = new_collection.get(include=["documents", "metadatas"])
-            batch_size = 50
-            for i in range(0, len(all_new["ids"]), batch_size):
-                final_collection.upsert(
-                    ids=all_new["ids"][i:i+batch_size],
-                    documents=all_new["documents"][i:i+batch_size],
-                    metadatas=all_new["metadatas"][i:i+batch_size]
-                )
-            
-            # Clean up
-            client.delete_collection("segments_new")
-            
-        except Exception as e:
-            _jobs[job_id]["status"] = "failed"
-            _jobs[job_id]["error"] = f"Failed to swap collections: {e}"
-            return
         
         _jobs[job_id]["status"] = "complete"
         _jobs[job_id]["completed_at"] = datetime.utcnow().isoformat()

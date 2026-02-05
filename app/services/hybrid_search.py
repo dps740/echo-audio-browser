@@ -2,7 +2,7 @@
 
 import chromadb
 from typing import List, Dict, Any, Optional
-from app.config import settings
+from app.config import settings, get_embedding_function
 
 # Synonym expansion lookup table
 SYNONYM_MAP = {
@@ -85,9 +85,10 @@ def hybrid_search(
         List of ranked segments with relevance scores
     """
     client = chromadb.PersistentClient(path=chroma_path)
+    embedding_fn = get_embedding_function()
     
     try:
-        collection = client.get_collection("segments")
+        collection = client.get_or_create_collection("segments", embedding_function=embedding_fn)
     except Exception:
         return []
     

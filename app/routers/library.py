@@ -5,13 +5,16 @@ from typing import List, Optional, Dict
 import chromadb
 from collections import defaultdict
 
+from app.config import get_embedding_function
+
 router = APIRouter(prefix="/library", tags=["library"])
 
 
 def _get_collection():
     """Get ChromaDB collection."""
     client = chromadb.PersistentClient(path="./chroma_data")
-    return client.get_or_create_collection("segments")
+    embedding_fn = get_embedding_function()
+    return client.get_or_create_collection("segments", embedding_function=embedding_fn)
 
 
 @router.get("/overview")

@@ -3,11 +3,13 @@
 from fastapi import APIRouter, HTTPException
 from typing import List, Optional
 import uuid
+import logging
 from datetime import datetime
 
 from app.models import PlaybackManifest, PlaybackSegment
 from app.services.vectordb import get_segments_by_topic, search_segments
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/playlists", tags=["playlists"])
 
@@ -16,7 +18,7 @@ router = APIRouter(prefix="/playlists", tags=["playlists"])
 async def get_topic_playlist(
     topic: str,
     limit: int = 10,
-    min_density: float = 0.3,
+    min_density: float = 0.0,
     diverse: bool = True,
 ):
     """
@@ -24,15 +26,19 @@ async def get_topic_playlist(
     
     - **topic**: Topic to search for (e.g., "AI Safety", "Stoicism")
     - **limit**: Max number of segments (default 10)
-    - **min_density**: Minimum density score (default 0.3)
+    - **min_density**: Minimum density score (default 0.0)
     - **diverse**: Ensure segments from different podcasts (default true)
     """
-    segments = await get_segments_by_topic(
-        topic=topic,
-        limit=limit,
-        min_density=min_density,
-        diversity=diverse,
-    )
+    try:
+        segments = await get_segments_by_topic(
+            topic=topic,
+            limit=limit,
+            min_density=min_density,
+            diversity=diverse,
+        )
+    except Exception as e:
+        logger.error(f"Search failed for topic '{topic}': {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Search error: {type(e).__name__}: {str(e)[:200]}")
     
     if not segments:
         raise HTTPException(status_code=404, detail=f"No segments found for topic: {topic}")

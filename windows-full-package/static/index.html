@@ -863,10 +863,18 @@
             playlist = data;
             renderSearchResults();
         } catch (e) {
+            // Try to get the actual error detail from the API
+            let detail = 'Try a different search term';
+            try {
+                const errText = e.message || '';
+                if (errText.includes('500')) {
+                    detail = 'Server error — check the console window for details. Try: http://localhost:8765/debug/search?q=' + encodeURIComponent(q);
+                }
+            } catch(_) {}
             el.innerHTML = `<div class="empty-state">
                 <div class="icon">😕</div>
                 <h3>No results</h3>
-                <p>Try a different search term</p>
+                <p>${detail}</p>
             </div>`;
         }
     }

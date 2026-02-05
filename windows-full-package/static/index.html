@@ -433,16 +433,12 @@
         <div class="card">
             <div class="card-title">Re-analyze Library</div>
             <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px;">
-                Re-process all content through the full pipeline. Choose shallow (re-embed only) or deep (full LLM re-segmentation).
+                Re-run the full pipeline on all existing content: LLM re-segmentation, key term extraction, and OpenAI embeddings. Creates new clip boundaries, summaries, and topic tags.
             </p>
-            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
-                <button class="btn btn-secondary" onclick="reanalyzeLibrary()" id="reanalyze-btn">🔄 Shallow Re-embed</button>
-                <button class="btn btn-primary" onclick="deepReanalyzeLibrary()" id="deep-reanalyze-btn">🧠 Deep Re-analyze</button>
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <button class="btn btn-primary" onclick="deepReanalyzeLibrary()" id="deep-reanalyze-btn">🧠 Re-analyze All</button>
                 <span id="reanalyze-status" style="font-size: 13px; color: var(--text-muted);"></span>
             </div>
-            <p style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">
-                <b>Shallow:</b> Re-embeds existing segments (fast, cheap). <b>Deep:</b> Full LLM re-segmentation — new clip boundaries, summaries, topics (slower, uses OpenAI API).
-            </p>
         </div>
 
         <!-- Jobs -->

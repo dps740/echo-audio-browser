@@ -1,126 +1,189 @@
 # Echo - Topic-First Audio Browser
 
 ## Project Overview
-**Status:** MVP Development (Phase 1 Complete)
+**Status:** MVP — Testing full pipeline (Deep Re-analyze)
 **Repo:** https://github.com/dps740/echo-audio-browser
 **Started:** 2026-01-26
-**Last Updated:** 2026-02-04
+**Last Updated:** 2026-02-05
 
 ## Core Concept
-Browse podcasts by **topic** rather than episode. Search "AI safety" and get a playlist of relevant 60-second segments from multiple podcasts. Audio streams directly from source (YouTube/podcast CDN) — zero hosting costs.
+Browse podcasts by **topic** rather than episode. Search "AI safety" and get a playlist of relevant segments from multiple podcasts. Audio stored locally — zero hosting costs.
 
 ## Architecture
 
 ```
-┌──────────────────────┐     ┌───────────────────┐     ┌─────────────┐
-│  Windows Client      │────▶│  Cloud Server     │────▶│  Web Player │
-│  (yt-dlp + Whisper)  │     │  (FastAPI)        │     │  (browser)  │
-│  - YouTube captions  │     │  - ChromaDB       │     │  - Search   │
-│  - Whisper fallback  │     │  - Hybrid search  │     │  - Play     │
-└──────────────────────┘     │  - Ingest API     │     │  - Playlist │
-                             └───────────────────┘     └─────────────┘
-                                      │
-                            Audio streams from YouTube/CDN
-                                  (no hosting needed!)
+┌──────────────────────┐
+│  Windows Desktop     │
+│  (all-in-one)        │
+│  ├─ FastAPI server   │
+│  ├─ ChromaDB         │
+│  ├─ Web UI (browser) │
+│  ├─ yt-dlp (captions + audio)
+│  └─ OpenAI API (segmentation + embeddings)
+└──────────────────────┘
 ```
 
-## What's Built
+David runs everything locally on his Windows PC. Server at `localhost:8765`, UI at `/player`.
 
-### Server (FastAPI) ~2,000 lines
-- **Feed management** — RSS feed parsing, episode listing
-- **Transcript resolver** — Scrapes free transcripts from podcast websites
-- **Hybrid search** — Semantic (ChromaDB) + keyword boosting
-- **Playlist API** — Topic playlists, search playlists, daily mix
-- **Ingest API** — Receives transcripts from local clients
-- **Web player** — Dark-themed UI, search → play → auto-advance
+## Full Ingestion Pipeline
 
-### Windows Client
-- **echo_ingest.py** — Extracts YouTube captions with timestamps
-- **Whisper fallback** — GPU-accelerated local transcription
-- **start_server.bat** — One-click local server startup
+New content goes through this pipeline (both on ingest and re-analyze):
 
-### Key Technical Decisions
-1. **Virtual stitching** — Stream from source URLs, no audio hosting ($0 bandwidth)
-2. **Transcript-first** — Use existing transcripts before paying for transcription
-3. **Hybrid search** — Semantic similarity + keyword matching for precision
-4. **~60 sec segments** — Granular enough for topic precision, long enough for context
-5. **YouTube as source** — Captions synced to audio (website transcripts aren't!)
+```
+YouTube URL
+  → yt-dlp: extract captions (timestamped) + download audio MP3
+  → GPT-4o-mini: LLM segmentation (5-15 segments per episode)
+     - Identifies "atomic ideas" — standalone topic discussions
+     - Sets segment boundaries (2-10 min each)
+     - Generates summary, topic tags, density score per segment
+  → GPT-4o-mini: key term extraction per segment
+     - Named entities, technical terms, concepts (3-7 per segment)
+  → Build enriched document per segment:
+     TOPIC: [tags]
+     SUMMARY: [LLM summary]
+     KEY TERMS: [extracted terms]
+     TRANSCRIPT: [raw text]
+  → OpenAI text-embedding-3-small: embed enriched documents
+  → ChromaDB: store segments with embeddings + metadata
+```
 
-## Cost Structure
+**Cost per episode:** ~$0.02-0.05 (GPT-4o-mini segmentation + key terms + embeddings)
 
-| Component | Cost |
-|-----------|------|
-| YouTube captions | $0 (free) |
-| Whisper transcription | $0 (local GPU) or $0.006/min API |
-| LLM segmentation | ~$0.02/episode (GPT-4o-mini) — OPTIONAL |
-| ChromaDB | $0 (self-hosted) |
-| Audio hosting | $0 (virtual stitching) |
-| Server hosting | $0-5/mo (Railway free tier) |
+## Search Pipeline
 
-**Per episode cost: ~$0** (YouTube captions) or **~$0.02** (with LLM enrichment)
+```
+User query (e.g. "AGI")
+  → Synonym expansion (AGI → artificial general intelligence, superintelligence, etc.)
+  → OpenAI embedding of query (text-embedding-3-small)
+  → ChromaDB semantic search: top 50 candidates
+  → Keyword boost: match query terms against transcript, summary, tags, key terms
+  → Diversity filter: max 3 per episode, max 4 per podcast
+  → Quality threshold: filter low-scoring results
+  → Return top N ranked segments
+```
 
-## Key Finding: Timestamp Mismatch ⚠️
-- Podcast website transcripts (e.g., lexfridman.com) have timestamps for the YouTube version
-- The podcast MP3 file has different timing (intros, ads, different edits)
-- **Solution: Use YouTube as both audio AND transcript source** — timestamps match!
+## Current State (Feb 5, 2026)
 
-## MVP Roadmap
+### What's Working
+- ✅ YouTube ingestion (single URL + batch channel)
+- ✅ Full LLM segmentation pipeline
+- ✅ Hybrid search (semantic + keyword)
+- ✅ Web UI: Dashboard, Library, Ingest, Player tabs
+- ✅ Audio playback with seek + crossfade
+- ✅ Deep Re-analyze (full pipeline re-run on existing content)
 
-### ✅ Phase 1: Proof of Concept (DONE - Feb 4, 2026)
-- [x] FastAPI server with search + playback
-- [x] Transcript scraping from podcast websites
-- [x] LLM segmentation (GPT-4o-mini)
-- [x] ChromaDB vector search
-- [x] Web player with virtual stitching
-- [x] Fixed timestamp mismatch issue
-- [x] Windows client for YouTube caption extraction
-- [x] Hybrid search (semantic + keyword)
+### Known Issues Being Tested
+- **Library tab failing** — was caused by fragile reindex swap (delete/recreate collection). Fixed: reindex now updates in place. Also added `/ingest/youtube/repair` endpoint for recovery.
+- **Player not playing** — was failing silently. Fixed: now shows visible error messages. Likely cause: audio files not downloaded (expired streaming URLs stored instead of local paths). Fix: re-ingest affected episodes.
+- **Same search results after old reanalyze** — old reanalyze only re-embedded, didn't re-segment. Fixed: replaced with Deep Re-analyze that runs full LLM pipeline.
+- **Embedding function mismatch** — `hybrid_search` was using default MiniLM embeddings to query against OpenAI-embedded data. Fixed: all code paths now use `get_embedding_function()` consistently.
 
-### 🔲 Phase 2: Content Pipeline (NEXT)
-- [ ] David ingests 50 popular podcasts from Windows PC
-- [ ] Validate YouTube caption quality at scale
-- [ ] Test Whisper fallback on GTX 1050 Ti
-- [ ] Build batch ingestion script (process full YouTube playlists)
+### David Testing (Feb 5)
+David needs to:
+1. `git pull` latest changes
+2. Hit `POST http://localhost:8765/ingest/youtube/repair` first (clean up any corrupted collections from old reindex)
+3. Restart server
+4. Check Library tab loads
+5. Run **🧠 Re-analyze All** from Ingest tab (full LLM pipeline on all existing content)
+6. Test search — should return different/better segments with proper boundaries
+7. Test player — check if audio plays. If errors, check error message in player bar
+   - If "SRC_NOT_SUPPORTED" or 404 → audio wasn't downloaded, need to re-ingest
+   - If "expired streaming URL" → same issue, re-ingest
 
-### 🔲 Phase 3: Deploy for Testing
-- [ ] Deploy server to Railway (stable URL)
-- [ ] Upload pre-indexed database
-- [ ] Share for feedback
-- [ ] Mobile-friendly player improvements
+## Bugs Fixed (Feb 5, 2026)
 
-### 🔲 Phase 4: Growth Features
-- [ ] User accounts & personalization
-- [ ] "Add your own podcast" workflow
-- [ ] Browser extension for one-click ingestion
-- [ ] Auto-ingest new episodes (residential proxy or Whisper API)
+### 1. Reindex Collection Swap (CRITICAL)
+**Problem:** Old reindex created `segments_new`, deleted `segments`, then tried to copy data back. If anything failed mid-swap, `segments` was empty/corrupted.
+**Fix:** Reindex now upserts directly to existing `segments` collection. No delete/create/copy dance. Added `/repair` endpoint to recover from botched swaps.
+
+### 2. Embedding Function Mismatch (CRITICAL)
+**Problem:** `hybrid_search` and `library.py` accessed ChromaDB collection without specifying the embedding function. If data was embedded with OpenAI (1536-dim), but queries used default MiniLM (384-dim), search results would be garbage.
+**Fix:** All code paths now use `get_embedding_function()` from config. Embedding function matches however data was ingested.
+
+### 3. Player Silent Failure
+**Problem:** When audio failed to load, player just reset the play button with no feedback. User had no idea why.
+**Fix:** Player now shows error message in the player bar (red text). Detects and warns about expired streaming URLs. Proper event listener cleanup prevents race conditions.
+
+### 4. Shallow vs Deep Reanalyze
+**Problem:** Old reanalyze only re-enriched text and re-embedded. Same segment boundaries, same clips. Can't evaluate pipeline quality.
+**Fix:** Replaced with single "Re-analyze All" button that runs the full pipeline: reconstruct transcript → LLM segmentation → key terms → enriched docs → embed.
 
 ## Files & Locations
 
 | Item | Location |
 |------|----------|
-| Server code | `~/clawd/projects/echo-audio-browser/app/` |
-| Web player | `~/clawd/projects/echo-audio-browser/static/index.html` |
-| Windows client | `~/clawd/projects/echo-audio-browser/windows-full-package/` |
-| Windows zip (Drive) | See Google Drive link in project notes |
-| ChromaDB data | `~/clawd/projects/echo-audio-browser/chroma_data/` |
+| Server code | `app/main.py`, `app/routers/`, `app/services/` |
+| Web UI | `static/index.html` |
+| Config | `app/config.py` (reads `.env` for API keys) |
+| ChromaDB data | `chroma_data/` |
+| Audio files | `app/audio/` (MP3s downloaded by yt-dlp) |
+| Windows package | `windows-full-package/` |
 | Git repo | https://github.com/dps740/echo-audio-browser |
 
-## Audio Storage
-- Audio downloads locally via yt-dlp as MP3
-- Server serves from `/audio/` directory (static files)
-- ~50-100 MB per episode, ~20-40 GB for 400 episodes
-- Local = instant seeking, no buffering, no expiring URLs
-- For production: S3/Backblaze (~$0.005/GB/mo → $0.20/mo for 40GB)
+### Key Source Files
+- `app/routers/youtube_ingest.py` — Ingest, reindex, deep reindex, repair endpoints
+- `app/services/segmentation.py` — LLM segmentation prompt + parsing
+- `app/services/hybrid_search.py` — 5-step search pipeline
+- `app/routers/library.py` — Library browsing (podcasts → episodes → segments)
+- `app/routers/playlists.py` — Search → playlist generation
+- `app/config.py` — Settings, embedding function selection
+
+### Environment Variables (.env)
+```
+OPENAI_API_KEY=sk-...          # Required for segmentation, key terms, embeddings
+EMBEDDING_MODEL=text-embedding-3-small
+SEGMENTATION_MODEL=gpt-4o-mini
+USE_OPENAI_EMBEDDINGS=true
+CHROMA_PERSIST_DIR=./chroma_data
+```
+
+## API Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/player` | Web UI |
+| GET | `/health` | Health check |
+| GET | `/library/overview` | Dashboard stats |
+| GET | `/library/podcasts/{name}/episodes` | Episode list |
+| GET | `/library/episodes/{id}/segments` | Segment list |
+| DELETE | `/library/episodes/{id}` | Delete episode |
+| GET | `/playlists/topic/{topic}` | Search → playlist |
+| POST | `/ingest/youtube/url` | Ingest single video |
+| POST | `/ingest/youtube/channel` | Batch ingest channel |
+| POST | `/ingest/youtube/deep-reindex` | Full LLM re-segmentation |
+| POST | `/ingest/youtube/repair` | Fix corrupted collections |
+| POST | `/ingest/youtube/reindex` | Re-embed existing segments (legacy) |
+| GET | `/ingest/youtube/jobs` | List active jobs |
+| GET | `/debug/search?q=...` | Debug search pipeline |
+
+## Next Steps
+
+After David validates the deep re-analyze results:
+1. **Evaluate search quality** — Do the new segments + embeddings produce better results?
+2. **Fix audio playback** — Ensure all episodes have local MP3s (not expired streaming URLs)
+3. **Scale test** — Ingest 50+ podcasts, test performance
+4. **Deploy** — Railway or similar for stable URL
+5. **Mobile UI** — Make player touch-friendly
+
+## Cost Structure
+
+| Component | Cost |
+|-----------|------|
+| YouTube captions | $0 (yt-dlp) |
+| Audio download | $0 (yt-dlp, stored locally) |
+| LLM segmentation | ~$0.02/episode (GPT-4o-mini) |
+| Key term extraction | ~$0.01/episode (GPT-4o-mini) |
+| OpenAI embeddings | ~$0.01/episode (text-embedding-3-small) |
+| ChromaDB | $0 (local) |
+| **Total per episode** | **~$0.03-0.05** |
 
 ## David's Windows Setup
 - **PC:** Windows desktop with GTX 1050 Ti
-- **Python:** Already installed
-- **GPU use:** faster-whisper for local transcription when YouTube captions unavailable
-- **Package (v4):** https://drive.google.com/file/d/1R13s57cR7DOM6w_vUgrWFa7uWWlVNtHi/view
-
-## Quick Start (David)
-1. Download zip, extract to C:\Echo
-2. `pip install yt-dlp requests fastapi uvicorn chromadb pydantic-settings httpx`
-3. Double-click `start_server.bat`
-4. New cmd: `python echo_batch_ingest.py --channel @lexfridman --limit 5`
-5. Browser: http://localhost:8765/player
+- **Python:** Installed
+- **GPU use:** faster-whisper for local transcription (fallback when no captions)
+- **Quick start:**
+  1. `git pull` in echo-audio-browser directory
+  2. `pip install -r requirements.txt`
+  3. Create `.env` with `OPENAI_API_KEY=sk-...`
+  4. `start_server.bat` or `python -m uvicorn app.main:app --port 8765`
+  5. Browser: http://localhost:8765/player

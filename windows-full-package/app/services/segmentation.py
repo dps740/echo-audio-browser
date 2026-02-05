@@ -1,8 +1,9 @@
 """Segmentation service using LLM to identify atomic ideas."""
 
 import json
-from typing import List, Dict, Any
-from dataclasses import dataclass
+import asyncio
+from typing import List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass, field
 
 try:
     import openai
@@ -201,3 +202,102 @@ def _parse_segments(segments_json: List[Dict], transcript: TranscriptResult) -> 
         ))
     
     return results
+
+
+@dataclass
+class ModelComparisonResult:
+    """Results from comparing two models side-by-side."""
+    model_a: str
+    model_b: str
+    segments_a: List[SegmentResult]
+    segments_b: List[SegmentResult]
+    cost_a: float  # Estimated cost in USD
+    cost_b: float
+    
+
+async def compare_models(
+    transcript: TranscriptResult,
+    model_a: str = "gpt-4o",
+    model_b: str = "gpt-4o-mini",
+) -> ModelComparisonResult:
+    """
+    Run segmentation with two different models for A/B comparison.
+    
+    Args:
+        transcript: The transcript to segment
+        model_a: First model (default: gpt-4o)
+        model_b: Second model (default: gpt-4o-mini)
+        
+    Returns:
+        ModelComparisonResult with both outputs and cost estimates
+    """
+    if not openai:
+        raise ValueError("OpenAI not installed")
+    if not settings.openai_api_key:
+        raise ValueError("OpenAI API key not configured")
+    
+    transcript_text = _prepare_transcript_with_times(transcript)
+    
+    # Run both models in parallel
+    async def run_model(model: str) -> Tuple[List[Dict], int, int]:
+        client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{
+                "role": "user",
+                "content": SEGMENTATION_PROMPT.format(transcript=transcript_text[:50000])
+            }],
+            temperature=0.3,
+            response_format={"type": "json_object"},
+        )
+        
+        content = response.choices[0].message.content
+        usage = response.usage
+        
+        # Parse response
+        try:
+            data = json.loads(content)
+            if isinstance(data, dict) and "segments" in data:
+                segments = data["segments"]
+            elif isinstance(data, list):
+                segments = data
+            else:
+                segments = []
+        except json.JSONDecodeError:
+            segments = []
+        
+        return segments, usage.prompt_tokens, usage.completion_tokens
+    
+    # Run both in parallel
+    results = await asyncio.gather(
+        run_model(model_a),
+        run_model(model_b),
+        return_exceptions=True
+    )
+    
+    # Process results
+    segments_a, tokens_in_a, tokens_out_a = results[0] if not isinstance(results[0], Exception) else ([], 0, 0)
+    segments_b, tokens_in_b, tokens_out_b = results[1] if not isinstance(results[1], Exception) else ([], 0, 0)
+    
+    # Cost estimates (per 1M tokens)
+    COSTS = {
+        "gpt-4o": {"input": 2.50, "output": 10.00},
+        "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+        "gpt-4-turbo": {"input": 10.00, "output": 30.00},
+    }
+    
+    def calc_cost(model: str, tokens_in: int, tokens_out: int) -> float:
+        rates = COSTS.get(model, COSTS["gpt-4o-mini"])
+        return (tokens_in * rates["input"] + tokens_out * rates["output"]) / 1_000_000
+    
+    cost_a = calc_cost(model_a, tokens_in_a, tokens_out_a)
+    cost_b = calc_cost(model_b, tokens_in_b, tokens_out_b)
+    
+    return ModelComparisonResult(
+        model_a=model_a,
+        model_b=model_b,
+        segments_a=_parse_segments(segments_a, transcript) if segments_a else [],
+        segments_b=_parse_segments(segments_b, transcript) if segments_b else [],
+        cost_a=cost_a,
+        cost_b=cost_b,
+    )

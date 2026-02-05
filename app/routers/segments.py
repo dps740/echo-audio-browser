@@ -8,7 +8,7 @@ from app.models import (
     TranscriptStatus, Segment
 )
 from app.services.transcription import transcribe_audio
-from app.services.segmentation import segment_transcript
+from app.services.segmentation import segment_transcript, compare_models, ModelComparisonResult
 from app.services.vectordb import store_segments, search_segments
 from app.services.hybrid_search import hybrid_search
 from app.routers.feeds import get_feeds_storage
@@ -175,3 +175,78 @@ async def _ingest_episode_task(episode_id: str, episode):
             "segment_count": 0,
             "message": f"Error: {str(e)}",
         }
+
+
+@router.post("/compare-models")
+async def compare_segmentation_models(
+    episode_id: str,
+    model_a: str = "gpt-4o",
+    model_b: str = "gpt-4o-mini",
+):
+    """
+    A/B test two models on the same episode to compare output quality.
+    
+    Returns segments from both models with cost estimates so you can
+    decide if the better model is worth the extra cost.
+    
+    - **episode_id**: Episode to analyze
+    - **model_a**: First model (default: gpt-4o)
+    - **model_b**: Second model (default: gpt-4o-mini)
+    """
+    _, episodes = get_feeds_storage()
+    
+    if episode_id not in episodes:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    
+    episode = episodes[episode_id]
+    
+    # Need transcript first - check if we have it
+    if episode_id not in _ingestion_status or _ingestion_status[episode_id]["status"] != TranscriptStatus.COMPLETE:
+        # Need to transcribe first
+        transcript = await transcribe_audio(str(episode.audio_url))
+    else:
+        # Re-transcribe for comparison (could cache this later)
+        transcript = await transcribe_audio(str(episode.audio_url))
+    
+    # Run comparison
+    comparison = await compare_models(
+        transcript=transcript,
+        model_a=model_a,
+        model_b=model_b,
+    )
+    
+    return {
+        "episode_id": episode_id,
+        "episode_title": episode.title,
+        "model_a": {
+            "name": comparison.model_a,
+            "cost_usd": round(comparison.cost_a, 4),
+            "segment_count": len(comparison.segments_a),
+            "segments": [
+                {
+                    "start_ms": s.start_ms,
+                    "end_ms": s.end_ms,
+                    "summary": s.summary,
+                    "topic_tags": s.topic_tags,
+                    "density_score": s.density_score,
+                }
+                for s in comparison.segments_a
+            ],
+        },
+        "model_b": {
+            "name": comparison.model_b,
+            "cost_usd": round(comparison.cost_b, 4),
+            "segment_count": len(comparison.segments_b),
+            "segments": [
+                {
+                    "start_ms": s.start_ms,
+                    "end_ms": s.end_ms,
+                    "summary": s.summary,
+                    "topic_tags": s.topic_tags,
+                    "density_score": s.density_score,
+                }
+                for s in comparison.segments_b
+            ],
+        },
+        "cost_difference": f"{comparison.cost_a / comparison.cost_b:.1f}x" if comparison.cost_b > 0 else "N/A",
+    }

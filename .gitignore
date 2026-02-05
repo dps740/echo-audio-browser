@@ -32,6 +32,10 @@ chroma_data/
 *.feather
 *.parquet
 
+# Audio files (local only)
+app/audio/
+audio/
+
 # IDE
 .idea/
 .vscode/

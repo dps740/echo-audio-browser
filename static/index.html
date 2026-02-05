@@ -429,6 +429,18 @@
             </div>
         </div>
 
+        <!-- Scan Local -->
+        <div class="card">
+            <div class="card-title">Scan Local Audio</div>
+            <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px;">
+                Re-process existing audio files in app/audio/ without re-downloading. Fetches captions from YouTube and runs the full segmentation pipeline.
+            </p>
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <button class="btn btn-primary" onclick="scanLocalAudio()" id="scan-local-btn">📂 Scan Local Files</button>
+                <span id="scan-local-status" style="font-size: 13px; color: var(--text-muted);"></span>
+            </div>
+        </div>
+
         <!-- Re-analyze -->
         <div class="card">
             <div class="card-title">Re-analyze Library</div>
@@ -778,6 +790,32 @@
         }
     }
 
+    async function scanLocalAudio() {
+        const btn = document.getElementById('scan-local-btn');
+        const status = document.getElementById('scan-local-status');
+        
+        btn.disabled = true;
+        btn.textContent = '⏳ Scanning...';
+        status.textContent = '';
+
+        try {
+            const r = await api('/ingest/youtube/scan-local', { method: 'POST' });
+            status.textContent = `Found ${r.files?.length || 0} files. Processing...`;
+            status.style.color = 'var(--success)';
+            btn.textContent = '✅ Started';
+            refreshJobs();
+            setTimeout(() => {
+                btn.disabled = false;
+                btn.textContent = '📂 Scan Local Files';
+            }, 5000);
+        } catch (e) {
+            status.textContent = 'Failed: ' + e.message;
+            status.style.color = '#f87171';
+            btn.disabled = false;
+            btn.textContent = '📂 Scan Local Files';
+        }
+    }
+
     async function deepReanalyzeLibrary() {
         const btn = document.getElementById('deep-reanalyze-btn');
         const status = document.getElementById('reanalyze-status');
@@ -908,6 +946,24 @@
             `;
         }
 
+        // Scan local progress
+        if (j.type === 'scan-local' && j.total_files) {
+            const done = (j.processed || 0) + (j.skipped || 0) + (j.failed || 0);
+            const pct = Math.round((done / j.total_files) * 100);
+            details += `
+                <div class="job-progress">
+                    <span style="font-size:13px;color:var(--text-secondary)">${j.processed || 0} processed · ${j.skipped || 0} skipped · ${j.failed || 0} failed (${done}/${j.total_files})</span>
+                    <div class="job-progress-bar"><div class="job-progress-fill" style="width:${pct}%"></div></div>
+                </div>
+            `;
+            if (j.current_file) {
+                details += `<div style="margin-top:4px;font-size:13px;color:var(--text-muted)">Current: ${esc(j.current_file)}</div>`;
+            }
+            if (j.errors && j.errors.length) {
+                details += `<div style="margin-top:4px;font-size:12px;color:var(--danger)">${j.errors.slice(-3).map(e => esc(e)).join('<br>')}</div>`;
+            }
+        }
+
         // Channel progress
         if (j.type === 'channel' && j.total_videos) {
             const done = j.current_video || 0;
@@ -936,7 +992,7 @@
         return `
             <div class="job-card">
                 <div class="job-header">
-                    <span class="job-title">${icon} ${j.type === 'reindex' ? 'Re-analyze Library' : j.type === 'channel' ? 'Channel: ' + esc(j.channel || '') : esc(j.url || j.title || 'Video')}</span>
+                    <span class="job-title">${icon} ${j.type === 'reindex' ? 'Re-analyze Library' : j.type === 'scan-local' ? 'Scan Local Audio' : j.type === 'channel' ? 'Channel: ' + esc(j.channel || '') : esc(j.url || j.title || 'Video')}</span>
                     <span class="list-item-badge ${badge}">${label}</span>
                 </div>
                 ${details}

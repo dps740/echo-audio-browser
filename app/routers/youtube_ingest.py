@@ -799,6 +799,107 @@ TRANSCRIPT: {seg.transcript_text[:2000]}"""
         _jobs[job_id]["error"] = str(e)[:300]
 
 
+@router.post("/scan-local")
+async def scan_local_audio(background_tasks: BackgroundTasks):
+    """
+    Scan local audio folder for existing MP3s and re-ingest them.
+    Fetches captions from YouTube without re-downloading audio.
+    """
+    global _job_counter
+    _job_counter += 1
+    job_id = f"scan-{_job_counter}"
+    
+    audio_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "audio")
+    
+    if not os.path.exists(audio_dir):
+        raise HTTPException(status_code=404, detail=f"Audio directory not found: {audio_dir}")
+    
+    # Find all MP3 files
+    mp3_files = [f for f in os.listdir(audio_dir) if f.endswith('.mp3')]
+    
+    if not mp3_files:
+        raise HTTPException(status_code=404, detail="No MP3 files found in audio directory")
+    
+    _jobs[job_id] = {
+        "id": job_id,
+        "type": "scan-local",
+        "status": "running",
+        "started_at": datetime.utcnow().isoformat(),
+        "total_files": len(mp3_files),
+        "processed": 0,
+        "skipped": 0,
+        "failed": 0,
+        "errors": []
+    }
+    
+    background_tasks.add_task(_scan_local_audio, job_id, audio_dir, mp3_files)
+    
+    return {"job_id": job_id, "message": f"Scanning {len(mp3_files)} local audio files", "files": mp3_files}
+
+
+def _scan_local_audio(job_id: str, audio_dir: str, mp3_files: list):
+    """Background task to process local audio files."""
+    import chromadb
+    from app.config import get_embedding_function
+    
+    for i, filename in enumerate(mp3_files):
+        try:
+            # Extract video ID from filename (e.g., "dQw4w9WgXcQ.mp3" -> "dQw4w9WgXcQ")
+            video_id = filename.replace('.mp3', '')
+            
+            _jobs[job_id]["current_file"] = filename
+            _jobs[job_id]["progress"] = f"{i+1}/{len(mp3_files)}"
+            
+            # Check if already ingested
+            if _is_already_ingested(video_id):
+                _jobs[job_id]["skipped"] += 1
+                continue
+            
+            # Fetch video metadata from YouTube
+            url = f"https://www.youtube.com/watch?v={video_id}"
+            cmd = ["yt-dlp", "--dump-json", "--no-download", url]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            
+            if result.returncode != 0:
+                _jobs[job_id]["failed"] += 1
+                _jobs[job_id]["errors"].append(f"{filename}: Could not fetch metadata")
+                continue
+            
+            metadata = json.loads(result.stdout)
+            title = metadata.get("title", video_id)
+            channel = metadata.get("channel", "Unknown")
+            
+            # Fetch captions
+            captions = _get_captions(url)
+            
+            if not captions:
+                _jobs[job_id]["failed"] += 1
+                _jobs[job_id]["errors"].append(f"{filename}: No captions available")
+                continue
+            
+            # Audio URL is local
+            audio_url = f"/audio/{filename}"
+            
+            # Run full ingestion pipeline (segmentation + embedding)
+            _ingest_to_chromadb(
+                episode_id=video_id,
+                title=title,
+                podcast=channel,
+                audio_url=audio_url,
+                segments=captions,
+                source="youtube"
+            )
+            
+            _jobs[job_id]["processed"] += 1
+            
+        except Exception as e:
+            _jobs[job_id]["failed"] += 1
+            _jobs[job_id]["errors"].append(f"{filename}: {str(e)[:100]}")
+    
+    _jobs[job_id]["status"] = "complete"
+    _jobs[job_id]["completed_at"] = datetime.utcnow().isoformat()
+
+
 @router.post("/repair")
 async def repair_collection():
     """

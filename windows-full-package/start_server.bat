@@ -4,7 +4,7 @@ echo    ECHO - Topic-First Audio Browser
 echo ============================================
 echo.
 echo Installing dependencies (first time only)...
-pip install fastapi uvicorn chromadb pydantic-settings httpx --quiet 2>nul
+pip install fastapi uvicorn chromadb pydantic-settings httpx openai --quiet 2>nul
 echo.
 echo Starting server...
 echo.

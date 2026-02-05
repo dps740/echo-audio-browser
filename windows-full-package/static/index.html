@@ -851,6 +851,9 @@
             indexing: ['📊', 'Indexing...', 'badge-info'],
             listing_videos: ['📋', 'Listing videos...', 'badge-info'],
             ingesting: ['🔄', 'Ingesting...', 'badge-info'],
+            loading_segments: ['📂', 'Loading segments...', 'badge-info'],
+            reprocessing: ['🔄', 'Re-analyzing...', 'badge-info'],
+            swapping: ['🔀', 'Finalizing...', 'badge-info'],
             complete: ['✅', 'Complete', 'badge-success'],
             failed: ['❌', 'Failed', 'badge-danger'],
             skipped: ['⏭️', 'Skipped (already exists)', 'badge-warning'],
@@ -861,6 +864,18 @@
         if (j.title) details += `<div style="margin-top:6px;font-size:14px">${esc(j.title)}</div>`;
         if (j.error) details += `<div style="margin-top:6px;color:var(--danger);font-size:13px">${esc(j.error)}</div>`;
         if (j.chunks_created) details += `<div style="margin-top:4px;font-size:13px;color:var(--text-secondary)">${j.chunks_created} chunks indexed</div>`;
+
+        // Reindex progress
+        if (j.type === 'reindex' && j.total_segments) {
+            const done = j.processed || 0;
+            const pct = Math.round((done / j.total_segments) * 100);
+            details += `
+                <div class="job-progress">
+                    <span style="font-size:13px;color:var(--text-secondary)">${done} / ${j.total_segments} segments re-analyzed</span>
+                    <div class="job-progress-bar"><div class="job-progress-fill" style="width:${pct}%"></div></div>
+                </div>
+            `;
+        }
 
         // Channel progress
         if (j.type === 'channel' && j.total_videos) {
@@ -890,7 +905,7 @@
         return `
             <div class="job-card">
                 <div class="job-header">
-                    <span class="job-title">${icon} ${j.type === 'channel' ? 'Channel: ' + esc(j.channel || '') : esc(j.url || j.title || 'Video')}</span>
+                    <span class="job-title">${icon} ${j.type === 'reindex' ? 'Re-analyze Library' : j.type === 'channel' ? 'Channel: ' + esc(j.channel || '') : esc(j.url || j.title || 'Video')}</span>
                     <span class="list-item-badge ${badge}">${label}</span>
                 </div>
                 ${details}

@@ -164,7 +164,7 @@ async def debug_search(q: str = "AI"):
 
 
 # Mount audio files directory
-audio_dir = os.path.join(os.path.dirname(__file__), "..", "audio")
+audio_dir = os.path.join(os.path.dirname(__file__), "audio")
 os.makedirs(audio_dir, exist_ok=True)
 app.mount("/audio", StaticFiles(directory=audio_dir), name="audio")
 

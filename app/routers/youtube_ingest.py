@@ -196,12 +196,129 @@ def _download_audio(url: str, video_id: str) -> str:
 
 
 def _ingest_to_chromadb(episode_id, title, podcast, audio_url, segments, source="youtube"):
-    """Store segments in ChromaDB."""
+    """Store segments in ChromaDB using LLM segmentation and enrichment."""
     import chromadb
-    client = chromadb.PersistentClient(path="./chroma_data")
-    collection = client.get_or_create_collection("segments")
+    from app.config import get_embedding_function
+    from app.services.segmentation import segment_transcript
+    from app.services.transcription import TranscriptResult, TranscriptWord
+    import openai
+    import asyncio
     
-    # Chunk into ~60 sec segments
+    client = chromadb.PersistentClient(path="./chroma_data")
+    embedding_fn = get_embedding_function()
+    collection = client.get_or_create_collection(
+        "segments",
+        embedding_function=embedding_fn
+    )
+    
+    # Convert caption segments to TranscriptResult for LLM segmentation
+    transcript_words = [
+        TranscriptWord(
+            word=seg["text"],
+            start_ms=seg["start_ms"],
+            end_ms=seg["end_ms"],
+            confidence=1.0
+        )
+        for seg in segments
+    ]
+    
+    transcript = TranscriptResult(
+        text=" ".join([seg["text"] for seg in segments]),
+        words=transcript_words,
+        language="en"
+    )
+    
+    # Use LLM segmentation for smart chunking
+    try:
+        llm_segments = asyncio.run(segment_transcript(transcript, title))
+    except Exception as e:
+        print(f"LLM segmentation failed: {e}, falling back to simple chunking")
+        # Fallback to dumb chunking if LLM fails
+        llm_segments = _fallback_chunking(segments)
+    
+    # Extract key terms for each segment
+    ids, docs, metas = [], [], []
+    
+    for i, seg in enumerate(llm_segments):
+        # Extract key terms using GPT-4o-mini
+        key_terms = _extract_key_terms(seg.transcript_text, seg.summary)
+        
+        # Build enriched document for embedding
+        enriched_doc = f"""TOPIC: {', '.join(seg.topic_tags)}
+SUMMARY: {seg.summary}
+KEY TERMS: {', '.join(key_terms)}
+TRANSCRIPT: {seg.transcript_text[:2000]}"""
+        
+        ids.append(f"{episode_id}_{i}")
+        docs.append(enriched_doc)
+        metas.append({
+            "episode_id": episode_id,
+            "episode_title": title,
+            "podcast_title": podcast,
+            "audio_url": audio_url,
+            "start_ms": seg.start_ms,
+            "end_ms": seg.end_ms,
+            "summary": seg.summary,
+            "topic_tags": ",".join(seg.topic_tags),
+            "key_terms": ",".join(key_terms),
+            "density_score": seg.density_score,
+            "source": source,
+        })
+    
+    # Batch upsert
+    batch_size = 50
+    for j in range(0, len(ids), batch_size):
+        collection.upsert(
+            ids=ids[j:j+batch_size],
+            documents=docs[j:j+batch_size],
+            metadatas=metas[j:j+batch_size]
+        )
+    
+    return len(llm_segments)
+
+
+def _extract_key_terms(transcript: str, summary: str) -> list:
+    """Extract key terms and entities from segment using GPT-4o-mini."""
+    import openai
+    from app.config import settings
+    
+    if not settings.openai_api_key:
+        return []
+    
+    try:
+        client = openai.OpenAI(api_key=settings.openai_api_key)
+        
+        prompt = f"""Extract 3-7 key terms, entities, and concepts from this podcast segment. 
+Focus on: named entities, technical terms, topics discussed, important concepts.
+Return as comma-separated list.
+
+Summary: {summary}
+
+Transcript excerpt: {transcript[:1000]}
+
+Key terms:"""
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=100,
+        )
+        
+        terms_text = response.choices[0].message.content.strip()
+        # Parse comma-separated terms
+        terms = [t.strip() for t in terms_text.split(",") if t.strip()]
+        return terms[:10]  # Limit to 10 terms max
+        
+    except Exception as e:
+        print(f"Key term extraction failed: {e}")
+        return []
+
+
+def _fallback_chunking(segments):
+    """Fallback to simple chunking if LLM segmentation fails."""
+    from app.services.segmentation import SegmentResult
+    
     chunks = []
     current = {"start_ms": None, "texts": [], "end_ms": 0}
     
@@ -211,47 +328,31 @@ def _ingest_to_chromadb(episode_id, title, podcast, audio_url, segments, source=
         current["texts"].append(seg["text"])
         current["end_ms"] = seg["end_ms"]
         
-        if current["end_ms"] - current["start_ms"] >= 60000:
-            chunks.append({
-                "start_ms": current["start_ms"],
-                "end_ms": current["end_ms"],
-                "text": " ".join(current["texts"])
-            })
+        # Chunk at ~120 seconds (2 minutes) instead of 60
+        if current["end_ms"] - current["start_ms"] >= 120000:
+            text = " ".join(current["texts"])
+            chunks.append(SegmentResult(
+                start_ms=current["start_ms"],
+                end_ms=current["end_ms"],
+                summary=text[:200] + "...",
+                topic_tags=["general"],
+                density_score=0.5,
+                transcript_text=text
+            ))
             current = {"start_ms": None, "texts": [], "end_ms": 0}
     
     if current["texts"]:
-        chunks.append({
-            "start_ms": current["start_ms"],
-            "end_ms": current["end_ms"],
-            "text": " ".join(current["texts"])
-        })
+        text = " ".join(current["texts"])
+        chunks.append(SegmentResult(
+            start_ms=current["start_ms"],
+            end_ms=current["end_ms"],
+            summary=text[:200] + "...",
+            topic_tags=["general"],
+            density_score=0.5,
+            transcript_text=text
+        ))
     
-    ids, docs, metas = [], [], []
-    for i, chunk in enumerate(chunks):
-        ids.append(f"{episode_id}_{i}")
-        docs.append(chunk["text"])
-        metas.append({
-            "episode_id": episode_id,
-            "episode_title": title,
-            "podcast_title": podcast,
-            "audio_url": audio_url,
-            "start_ms": chunk["start_ms"],
-            "end_ms": chunk["end_ms"],
-            "summary": chunk["text"][:150] + "...",
-            "topic_tags": "",
-            "density_score": 0.7,
-            "source": source,
-        })
-    
-    batch_size = 50
-    for j in range(0, len(ids), batch_size):
-        collection.upsert(
-            ids=ids[j:j+batch_size],
-            documents=docs[j:j+batch_size],
-            metadatas=metas[j:j+batch_size]
-        )
-    
-    return len(chunks)
+    return chunks
 
 
 def _ingest_single_video(job_id: str, url: str, podcast_name: Optional[str] = None):
@@ -485,3 +586,181 @@ async def clear_job(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     del _jobs[job_id]
     return {"status": "cleared"}
+
+
+@router.post("/reindex")
+async def reindex_all(background_tasks: BackgroundTasks):
+    """
+    Re-index all existing ChromaDB entries through the new enrichment pipeline.
+    This will update embeddings, extract key terms, and build enriched documents.
+    """
+    global _job_counter
+    _job_counter += 1
+    job_id = f"reindex_{_job_counter}_{int(time.time())}"
+    
+    _jobs[job_id] = {
+        "job_id": job_id,
+        "type": "reindex",
+        "status": "queued",
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    
+    background_tasks.add_task(_reindex_all_segments, job_id)
+    
+    return {"job_id": job_id, "status": "queued", "message": "Re-indexing all segments with new pipeline"}
+
+
+def _reindex_all_segments(job_id: str):
+    """Background task: re-process all ChromaDB segments."""
+    import chromadb
+    from app.config import get_embedding_function
+    
+    try:
+        _jobs[job_id]["status"] = "loading_segments"
+        
+        client = chromadb.PersistentClient(path="./chroma_data")
+        embedding_fn = get_embedding_function()
+        
+        # Get existing collection
+        try:
+            old_collection = client.get_collection("segments")
+        except:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = "No segments collection found"
+            return
+        
+        # Get all segments
+        all_results = old_collection.get(include=["metadatas", "documents"])
+        
+        if not all_results["ids"]:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = "No segments found"
+            return
+        
+        total_segments = len(all_results["ids"])
+        _jobs[job_id]["total_segments"] = total_segments
+        _jobs[job_id]["status"] = "reprocessing"
+        
+        # Group by episode for efficient re-processing
+        episodes = {}
+        for seg_id, meta, doc in zip(all_results["ids"], all_results["metadatas"], all_results["documents"]):
+            episode_id = meta.get("episode_id", "unknown")
+            if episode_id not in episodes:
+                episodes[episode_id] = []
+            episodes[episode_id].append({"id": seg_id, "meta": meta, "doc": doc})
+        
+        # Create new collection with embedding function
+        try:
+            client.delete_collection("segments_backup")
+        except:
+            pass
+        
+        # Rename old collection as backup
+        try:
+            # ChromaDB doesn't support rename, so we'll just create new and delete old after
+            pass
+        except:
+            pass
+        
+        new_collection = client.get_or_create_collection(
+            "segments_new",
+            embedding_function=embedding_fn
+        )
+        
+        processed = 0
+        
+        for episode_id, segs in episodes.items():
+            try:
+                # Re-process each segment with enrichment
+                ids, docs, metas = [], [], []
+                
+                for seg_data in segs:
+                    meta = seg_data["meta"]
+                    old_doc = seg_data["doc"]
+                    
+                    # Extract transcript from old doc or metadata
+                    transcript = old_doc[:2000] if len(old_doc) > 100 else meta.get("summary", "")
+                    summary = meta.get("summary", transcript[:200])
+                    
+                    # Extract key terms
+                    key_terms = _extract_key_terms(transcript, summary)
+                    
+                    # Get or default topic tags
+                    topic_tags = meta.get("topic_tags", "general")
+                    if not topic_tags:
+                        topic_tags = "general"
+                    
+                    # Build enriched document
+                    enriched_doc = f"""TOPIC: {topic_tags}
+SUMMARY: {summary}
+KEY TERMS: {', '.join(key_terms)}
+TRANSCRIPT: {transcript}"""
+                    
+                    ids.append(seg_data["id"])
+                    docs.append(enriched_doc)
+                    
+                    # Update metadata
+                    updated_meta = meta.copy()
+                    updated_meta["key_terms"] = ",".join(key_terms)
+                    metas.append(updated_meta)
+                
+                # Batch upsert
+                new_collection.upsert(
+                    ids=ids,
+                    documents=docs,
+                    metadatas=metas
+                )
+                
+                processed += len(segs)
+                _jobs[job_id]["processed"] = processed
+                
+            except Exception as e:
+                print(f"Failed to reindex episode {episode_id}: {e}")
+                continue
+        
+        # Replace old collection with new
+        _jobs[job_id]["status"] = "finalizing"
+        
+        try:
+            client.delete_collection("segments_backup")
+        except:
+            pass
+        
+        # Backup old, swap in new
+        try:
+            old_collection_data = client.get_collection("segments")
+            # Can't rename in ChromaDB, so delete and rename new
+            client.delete_collection("segments")
+            
+            # Get new collection and "rename" by creating final one
+            new_data = client.get_collection("segments_new")
+            final_collection = client.get_or_create_collection(
+                "segments",
+                embedding_function=embedding_fn
+            )
+            
+            # Copy all data from segments_new to segments
+            all_new = new_collection.get(include=["documents", "metadatas"])
+            batch_size = 50
+            for i in range(0, len(all_new["ids"]), batch_size):
+                final_collection.upsert(
+                    ids=all_new["ids"][i:i+batch_size],
+                    documents=all_new["documents"][i:i+batch_size],
+                    metadatas=all_new["metadatas"][i:i+batch_size]
+                )
+            
+            # Clean up
+            client.delete_collection("segments_new")
+            
+        except Exception as e:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = f"Failed to swap collections: {e}"
+            return
+        
+        _jobs[job_id]["status"] = "complete"
+        _jobs[job_id]["completed_at"] = datetime.utcnow().isoformat()
+        _jobs[job_id]["processed"] = processed
+        
+    except Exception as e:
+        _jobs[job_id]["status"] = "failed"
+        _jobs[job_id]["error"] = str(e)[:300]

@@ -485,6 +485,13 @@
     let segEndTime = 0;
     let transitioning = false;
     const audio = document.getElementById('audio-el');
+    
+    // Web Audio API for crossfade
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    let audioCtx = null;
+    let currentSource = null;
+    let currentGainNode = null;
+    let nextAudioBuffer = null;
 
     // ═══════════════════ NAVIGATION ═══════════════════
     document.querySelectorAll('.nav-tab').forEach(tab => {
@@ -900,50 +907,93 @@
         `;
     }
 
-    // ═══════════════════ AUDIO PLAYBACK ═══════════════════
-    function playSegment(index) {
+    // ═══════════════════ AUDIO PLAYBACK WITH CROSSFADE ═══════════════════
+    async function playSegment(index) {
         if (!playlist || index >= playlist.segments.length || transitioning) return;
+        
+        // Initialize Web Audio Context on first play
+        if (!audioCtx) {
+            audioCtx = new AudioContext();
+        }
+        
         transitioning = true;
-        playIndex = index;
         const seg = playlist.segments[index];
         const startSec = seg.start_time_ms / 1000;
         segEndTime = seg.end_time_ms / 1000;
-
-        // Update player bar
+        
+        // Update UI
         document.getElementById('player-bar').classList.add('active');
         document.body.classList.add('player-active');
         document.getElementById('player-title').textContent = seg.episode_title;
         document.getElementById('player-meta').textContent = `${seg.podcast_title} · ${fmt(seg.start_time_ms)} → ${fmt(seg.end_time_ms)}`;
         document.getElementById('play-btn').textContent = '⏸';
-
+        
         // Highlight in list
         document.querySelectorAll('.segment-card').forEach((c, i) => {
             c.classList.toggle('playing', i === index);
         });
-
-        audio.pause();
-        audio.src = seg.source_url;
-        audio.load();
-        audio.onloadedmetadata = () => {
-            console.log(`Audio loaded, seeking to ${startSec}s`);
-            audio.currentTime = startSec;
-        };
-        audio.oncanplay = () => {
-            console.log('Audio can play, starting...');
-            audio.play().then(() => {
-                transitioning = false;
-                document.getElementById('play-btn').textContent = '⏸';
-            }).catch(e => {
-                console.error('Autoplay blocked:', e);
-                transitioning = false;
-                document.getElementById('play-btn').textContent = '▶';
+        
+        // Crossfade if already playing
+        if (currentSource && currentGainNode) {
+            // Fade out current audio (300ms)
+            const fadeOutTime = audioCtx.currentTime;
+            currentGainNode.gain.setValueAtTime(1, fadeOutTime);
+            currentGainNode.gain.linearRampToValueAtTime(0, fadeOutTime + 0.3);
+            
+            // Stop after fade + silence
+            setTimeout(() => {
+                if (currentSource) {
+                    try { currentSource.stop(); } catch (e) {}
+                }
+            }, 500); // 300ms fade + 200ms silence
+        }
+        
+        try {
+            // Load new segment using basic audio element for simplicity
+            // (Full Web Audio buffer loading would be more complex)
+            audio.pause();
+            audio.src = seg.source_url;
+            audio.load();
+            
+            await new Promise((resolve, reject) => {
+                audio.onloadedmetadata = () => {
+                    audio.currentTime = startSec;
+                    resolve();
+                };
+                audio.onerror = reject;
+                setTimeout(reject, 10000); // 10s timeout
             });
-            audio.oncanplay = null;  // Only fire once
-        };
-        audio.onerror = (e) => {
-            console.error('Audio error:', audio.error);
+            
+            // Wait for silence period if crossfading
+            if (currentSource) {
+                await new Promise(r => setTimeout(r, 500)); // 300ms fade + 200ms silence
+            }
+            
+            // Fade in new audio (300ms)
+            await audio.play();
+            audio.volume = 0;
+            
+            const fadeInStart = Date.now();
+            const fadeInDuration = 300;
+            const fadeInterval = setInterval(() => {
+                const elapsed = Date.now() - fadeInStart;
+                if (elapsed >= fadeInDuration) {
+                    audio.volume = 1;
+                    clearInterval(fadeInterval);
+                } else {
+                    audio.volume = elapsed / fadeInDuration;
+                }
+            }, 20);
+            
+            playIndex = index;
             transitioning = false;
-        };
+            document.getElementById('play-btn').textContent = '⏸';
+            
+        } catch (e) {
+            console.error('Playback failed:', e);
+            transitioning = false;
+            document.getElementById('play-btn').textContent = '▶';
+        }
     }
 
     function togglePlay() {

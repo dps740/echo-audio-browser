@@ -74,7 +74,7 @@ class SegmentSearchResult(BaseModel):
     episode_id: str
     episode_title: str
     podcast_title: str
-    audio_url: HttpUrl
+    audio_url: str  # Can be local path (/audio/xxx.mp3) or full URL
     start_ms: int
     end_ms: int
     summary: str
@@ -86,7 +86,7 @@ class SegmentSearchResult(BaseModel):
 class PlaybackSegment(BaseModel):
     """A segment in a playback manifest."""
     segment_id: str
-    source_url: str  # Can be HttpUrl or local path like /audio/xxx.mp3
+    source_url: str  # Can be local path (/audio/xxx.mp3) or full URL
     start_time_ms: int
     end_time_ms: int
     preroll_text: str

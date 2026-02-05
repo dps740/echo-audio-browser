@@ -7,7 +7,8 @@ import logging
 from datetime import datetime
 
 from app.models import PlaybackManifest, PlaybackSegment
-from app.services.vectordb import get_segments_by_topic, search_segments
+from app.services.hybrid_search import hybrid_search
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,11 @@ async def get_topic_playlist(
     - **diverse**: Ensure segments from different podcasts (default true)
     """
     try:
-        segments = await get_segments_by_topic(
-            topic=topic,
+        # Use hybrid search instead of pure vector search
+        segments = hybrid_search(
+            query=topic,
             limit=limit,
+            chroma_path=settings.chroma_persist_dir,
             min_density=min_density,
             diversity=diverse,
         )
@@ -88,10 +91,13 @@ async def search_playlist(
     - **limit**: Max segments
     - **min_density**: Minimum density score
     """
-    segments = await search_segments(
+    # Use hybrid search for better results
+    segments = hybrid_search(
         query=q,
         limit=limit,
+        chroma_path=settings.chroma_persist_dir,
         min_density=min_density,
+        diversity=False,  # Search doesn't enforce diversity by default
     )
     
     if not segments:
@@ -147,19 +153,22 @@ async def get_daily_mix(
         
         all_segments = []
         for topic in topic_list:
-            topic_segs = await get_segments_by_topic(
-                topic=topic,
+            topic_segs = hybrid_search(
+                query=topic,
                 limit=segments_per_topic,
+                chroma_path=settings.chroma_persist_dir,
                 min_density=0.5,
                 diversity=True,
             )
             all_segments.extend(topic_segs)
     else:
         # Get high-density segments across all topics
-        all_segments = await search_segments(
+        all_segments = hybrid_search(
             query="interesting insights analysis",
             limit=limit * 2,
+            chroma_path=settings.chroma_persist_dir,
             min_density=0.6,
+            diversity=True,
         )
         # Shuffle for variety
         import random

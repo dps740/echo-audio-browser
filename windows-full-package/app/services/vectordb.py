@@ -4,7 +4,7 @@ from typing import List, Optional, Dict, Any
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 
-from app.config import settings
+from app.config import settings, get_embedding_function
 from app.services.segmentation import SegmentResult
 
 
@@ -22,12 +22,14 @@ def get_client() -> chromadb.Client:
 
 
 def get_collection() -> chromadb.Collection:
-    """Get or create the segments collection."""
+    """Get or create the segments collection with custom embedding function."""
     global _collection
     if _collection is None:
         client = get_client()
+        embedding_fn = get_embedding_function()
         _collection = client.get_or_create_collection(
             name="segments",
+            embedding_function=embedding_fn,
             metadata={"hnsw:space": "cosine"}
         )
     return _collection

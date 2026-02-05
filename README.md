@@ -1,115 +1,93 @@
 # Echo - Topic-First Audio Browser
 
-**Status:** MVP Development  
-**Philosophy:** Anti-Summarizer - deliver high-fidelity audio segments, not text summaries
+**Status:** MVP Testing  
+Browse podcasts by **topic**, not episode. Search "AI safety" and get a playlist of relevant segments from across your library.
 
-## Core Concept
-
-Echo lets users browse podcasts by **topic** rather than episode. Instead of "Episode 234 of Lex Fridman", users see "AI Safety discussions" and get a curated playlist of relevant segments from multiple podcasts.
-
-### Key Innovation: Virtual Stitching
-
-- No audio re-hosting (legal/cost advantage)
-- Stream directly from original source URLs
-- Client seeks to specific timestamps
-- Zero storage costs for audio
-
-## Architecture
-
-```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   RSS Feeds     │────▶│   Transcription  │────▶│   Segmentation  │
-│   (podcasts)    │     │   (Deepgram)     │     │   (LLM)         │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
-                                                          │
-                                                          ▼
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   Web Player    │◀────│   Manifest API   │◀────│   Vector DB     │
-│   (client)      │     │   (FastAPI)      │     │   (ChromaDB)    │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
-```
-
-## Quick Start
+## Quick Start (Windows)
 
 ```bash
-# Install dependencies
+# 1. Clone and setup
+git clone https://github.com/dps740/echo-audio-browser
+cd echo-audio-browser
 pip install -r requirements.txt
 
-# Set up environment
+# 2. Configure
 cp .env.example .env
-# Add your API keys
+# Edit .env - add your OPENAI_API_KEY
 
-# Run the server
-python -m uvicorn app.main:app --reload
+# 3. Run
+start_server.bat
+# Or: python -m uvicorn app.main:app --port 8765
 
-# Access API docs
-open http://localhost:8000/docs
+# 4. Open browser
+http://localhost:8765/player
+```
+
+## Environment Variables
+
+```bash
+# Required
+OPENAI_API_KEY=sk-...          # For segmentation + embeddings
+
+# Optional (defaults work fine)
+EMBEDDING_MODEL=text-embedding-3-small
+SEGMENTATION_MODEL=gpt-4o-mini
+USE_OPENAI_EMBEDDINGS=true
+CHROMA_PERSIST_DIR=./chroma_data
 ```
 
 ## Project Structure
 
 ```
 echo-audio-browser/
-├── app/
-│   ├── main.py              # FastAPI app
-│   ├── config.py            # Settings
-│   ├── models.py            # Pydantic models
-│   ├── routers/
-│   │   ├── feeds.py         # RSS feed management
-│   │   ├── episodes.py      # Episode ingestion
-│   │   ├── segments.py      # Segment search
-│   │   └── playlists.py     # Manifest generation
-│   ├── services/
-│   │   ├── transcription.py # Deepgram/Whisper
-│   │   ├── segmentation.py  # LLM chunking
-│   │   ├── vectordb.py      # ChromaDB
-│   │   └── rss.py           # Feed parsing
-│   └── utils/
-├── tests/
-├── static/                   # Simple web player
-├── requirements.txt
-└── .env.example
+├── app/                    # FastAPI server
+│   ├── main.py            # App entry point
+│   ├── config.py          # Settings
+│   ├── routers/           # API endpoints
+│   │   ├── youtube_ingest.py   # Ingest, re-analyze, repair
+│   │   ├── library.py     # Browse podcasts/episodes
+│   │   └── playlists.py   # Search → playlist
+│   └── services/          # Business logic
+│       ├── segmentation.py     # LLM segmentation
+│       ├── hybrid_search.py    # Semantic + keyword search
+│       └── vectordb.py         # ChromaDB operations
+├── static/
+│   └── index.html         # Web UI (Dashboard, Library, Ingest, Player)
+├── scripts/               # Utility scripts
+│   ├── echo_ingest.py     # CLI batch ingest
+│   └── ingest.bat         # Windows batch wrapper
+├── chroma_data/           # Vector DB storage (gitignored)
+├── start_server.bat       # Windows launcher
+├── ECHO_PROJECT.md        # Detailed architecture docs
+└── requirements.txt
 ```
+
+## Features
+
+- **YouTube ingestion** - Paste URL or select from curated podcasts
+- **LLM segmentation** - GPT-4o-mini identifies topic boundaries (2-10 min segments)
+- **Hybrid search** - Semantic + keyword matching
+- **Audio player** - Stream with seek, crossfade between segments
+- **Re-analyze** - Re-run full pipeline on existing content
 
 ## API Endpoints
 
-- `POST /feeds` - Add podcast RSS feed
-- `GET /feeds` - List subscribed feeds
-- `POST /episodes/{id}/ingest` - Transcribe & segment episode
-- `GET /segments/search?q=topic` - Search segments by topic
-- `GET /playlists/topic/{topic}` - Get playback manifest for topic
-- `GET /playlists/daily-mix` - Personalized daily mix
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /player` | Web UI |
+| `GET /library/overview` | Dashboard stats |
+| `GET /playlists/topic/{topic}` | Search → playlist |
+| `POST /ingest/youtube/url` | Ingest single video |
+| `POST /ingest/youtube/deep-reindex` | Re-run LLM segmentation |
+| `POST /ingest/youtube/repair` | Fix corrupted collections |
 
-## Environment Variables
+## Cost
 
-```
-DEEPGRAM_API_KEY=your_key
-OPENAI_API_KEY=your_key
-ANTHROPIC_API_KEY=your_key
-DATABASE_URL=sqlite:///./echo.db
-CHROMA_PERSIST_DIR=./chroma_data
-```
+~$0.03-0.05 per episode (GPT-4o-mini segmentation + embeddings)
 
-## Development Roadmap
+## Docs
 
-### MVP (Current)
-- [ ] RSS feed ingestion
-- [ ] Transcription (Deepgram)
-- [ ] LLM segmentation
-- [ ] Vector search
-- [ ] Manifest API
-- [ ] Simple web player
-
-### V1
-- [ ] User accounts
-- [ ] Personalization
-- [ ] Mobile apps (iOS/Android)
-- [ ] Dynamic ad detection
-
-### V2
-- [ ] Audio fingerprinting for timestamp drift
-- [ ] Multi-language support
-- [ ] Creator analytics
+See `ECHO_PROJECT.md` for full architecture, pipeline details, and troubleshooting.
 
 ## License
 

@@ -222,10 +222,14 @@ def _ingest_to_chromadb(episode_id, title, podcast, audio_url, segments, source=
         for seg in segments
     ]
     
+    # Calculate total duration from segments
+    total_duration_ms = max([seg["end_ms"] for seg in segments]) if segments else 0
+    
     transcript = TranscriptResult(
         text=" ".join([seg["text"] for seg in segments]),
         words=transcript_words,
-        language="en"
+        duration_ms=total_duration_ms,
+        speakers=[]
     )
     
     # Use LLM segmentation for smart chunking

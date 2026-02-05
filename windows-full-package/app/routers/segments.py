@@ -215,6 +215,22 @@ async def compare_segmentation_models(
         model_b=model_b,
     )
     
+    def metrics_to_dict(m):
+        if not m:
+            return None
+        return {
+            "segment_count": m.segment_count,
+            "avg_duration_min": m.avg_duration_min,
+            "duration_std_min": m.duration_std_min,
+            "coverage_pct": m.coverage_pct,
+            "avg_summary_length": m.avg_summary_length,
+            "avg_tags_per_segment": m.avg_tags_per_segment,
+            "unique_tags": m.unique_tags,
+            "density_mean": m.density_mean,
+            "density_std": m.density_std,
+            "specificity_score": m.specificity_score,
+        }
+    
     return {
         "episode_id": episode_id,
         "episode_title": episode.title,
@@ -222,6 +238,7 @@ async def compare_segmentation_models(
             "name": comparison.model_a,
             "cost_usd": round(comparison.cost_a, 4),
             "segment_count": len(comparison.segments_a),
+            "metrics": metrics_to_dict(comparison.metrics_a),
             "segments": [
                 {
                     "start_ms": s.start_ms,
@@ -237,6 +254,7 @@ async def compare_segmentation_models(
             "name": comparison.model_b,
             "cost_usd": round(comparison.cost_b, 4),
             "segment_count": len(comparison.segments_b),
+            "metrics": metrics_to_dict(comparison.metrics_b),
             "segments": [
                 {
                     "start_ms": s.start_ms,
@@ -249,4 +267,82 @@ async def compare_segmentation_models(
             ],
         },
         "cost_difference": f"{comparison.cost_a / comparison.cost_b:.1f}x" if comparison.cost_b > 0 else "N/A",
+        "boundary_agreement": comparison.boundary_agreement,
+        "interpretation": _interpret_comparison(comparison),
+    }
+
+
+def _interpret_comparison(comparison) -> dict:
+    """Generate human-readable interpretation of the comparison."""
+    ma = comparison.metrics_a
+    mb = comparison.metrics_b
+    
+    if not ma or not mb:
+        return {"summary": "Unable to compare - missing data"}
+    
+    insights = []
+    winner_points = {"a": 0, "b": 0}
+    
+    # Compare specificity
+    if ma.specificity_score > mb.specificity_score + 0.1:
+        insights.append(f"{comparison.model_a} has more specific/detailed analysis")
+        winner_points["a"] += 1
+    elif mb.specificity_score > ma.specificity_score + 0.1:
+        insights.append(f"{comparison.model_b} has more specific/detailed analysis")
+        winner_points["b"] += 1
+    
+    # Compare coverage
+    if ma.coverage_pct > mb.coverage_pct + 5:
+        insights.append(f"{comparison.model_a} covers more of the episode ({ma.coverage_pct}% vs {mb.coverage_pct}%)")
+        winner_points["a"] += 1
+    elif mb.coverage_pct > ma.coverage_pct + 5:
+        insights.append(f"{comparison.model_b} covers more of the episode ({mb.coverage_pct}% vs {ma.coverage_pct}%)")
+        winner_points["b"] += 1
+    
+    # Compare tag diversity
+    if ma.unique_tags > mb.unique_tags + 2:
+        insights.append(f"{comparison.model_a} identifies more diverse topics ({ma.unique_tags} vs {mb.unique_tags} unique tags)")
+        winner_points["a"] += 1
+    elif mb.unique_tags > ma.unique_tags + 2:
+        insights.append(f"{comparison.model_b} identifies more diverse topics ({mb.unique_tags} vs {ma.unique_tags} unique tags)")
+        winner_points["b"] += 1
+    
+    # Summary length (prefer 15-40 words)
+    ideal_summary = 25
+    a_summary_quality = 1 - abs(ma.avg_summary_length - ideal_summary) / ideal_summary
+    b_summary_quality = 1 - abs(mb.avg_summary_length - ideal_summary) / ideal_summary
+    if a_summary_quality > b_summary_quality + 0.2:
+        insights.append(f"{comparison.model_a} has better summary length ({ma.avg_summary_length:.0f} words avg)")
+        winner_points["a"] += 1
+    elif b_summary_quality > a_summary_quality + 0.2:
+        insights.append(f"{comparison.model_b} has better summary length ({mb.avg_summary_length:.0f} words avg)")
+        winner_points["b"] += 1
+    
+    # Cost efficiency
+    cost_ratio = comparison.cost_a / comparison.cost_b if comparison.cost_b > 0 else 1
+    
+    # Determine winner
+    if winner_points["a"] > winner_points["b"]:
+        winner = comparison.model_a
+        winner_score = winner_points["a"]
+    elif winner_points["b"] > winner_points["a"]:
+        winner = comparison.model_b
+        winner_score = winner_points["b"]
+    else:
+        winner = "tie"
+        winner_score = 0
+    
+    return {
+        "winner": winner,
+        "winner_score": f"{winner_score}/{winner_points['a'] + winner_points['b']} metrics",
+        "cost_ratio": f"{cost_ratio:.1f}x",
+        "worth_premium": winner == comparison.model_a and cost_ratio > 1,
+        "insights": insights,
+        "recommendation": (
+            f"Use {comparison.model_a} - quality improvement justifies {cost_ratio:.0f}x cost"
+            if winner == comparison.model_a and cost_ratio > 1 else
+            f"Use {comparison.model_b} - similar quality at {cost_ratio:.0f}x lower cost"
+            if winner == comparison.model_b or winner == "tie" else
+            "Results are comparable - use cheaper model"
+        ),
     }

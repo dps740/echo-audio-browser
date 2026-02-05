@@ -205,6 +205,21 @@ def _parse_segments(segments_json: List[Dict], transcript: TranscriptResult) -> 
 
 
 @dataclass
+class SegmentQualityMetrics:
+    """Quality metrics for a set of segments."""
+    segment_count: int
+    avg_duration_min: float
+    duration_std_min: float  # Standard deviation - consistency
+    coverage_pct: float  # % of episode covered by segments
+    avg_summary_length: float  # Words per summary
+    avg_tags_per_segment: float
+    unique_tags: int
+    density_mean: float
+    density_std: float  # Variance in density scores
+    specificity_score: float  # 0-1, higher = more specific summaries
+
+
+@dataclass
 class ModelComparisonResult:
     """Results from comparing two models side-by-side."""
     model_a: str
@@ -213,6 +228,9 @@ class ModelComparisonResult:
     segments_b: List[SegmentResult]
     cost_a: float  # Estimated cost in USD
     cost_b: float
+    metrics_a: Optional[SegmentQualityMetrics] = None
+    metrics_b: Optional[SegmentQualityMetrics] = None
+    boundary_agreement: float = 0.0  # How much segment boundaries overlap
     
 
 async def compare_models(
@@ -293,11 +311,119 @@ async def compare_models(
     cost_a = calc_cost(model_a, tokens_in_a, tokens_out_a)
     cost_b = calc_cost(model_b, tokens_in_b, tokens_out_b)
     
+    parsed_a = _parse_segments(segments_a, transcript) if segments_a else []
+    parsed_b = _parse_segments(segments_b, transcript) if segments_b else []
+    
+    # Calculate total episode duration
+    total_duration_ms = transcript.words[-1].end_ms if transcript.words else 0
+    
+    # Calculate quality metrics
+    metrics_a = _calculate_metrics(parsed_a, total_duration_ms) if parsed_a else None
+    metrics_b = _calculate_metrics(parsed_b, total_duration_ms) if parsed_b else None
+    
+    # Calculate boundary agreement between models
+    boundary_agreement = _calculate_boundary_agreement(parsed_a, parsed_b, total_duration_ms)
+    
     return ModelComparisonResult(
         model_a=model_a,
         model_b=model_b,
-        segments_a=_parse_segments(segments_a, transcript) if segments_a else [],
-        segments_b=_parse_segments(segments_b, transcript) if segments_b else [],
+        segments_a=parsed_a,
+        segments_b=parsed_b,
         cost_a=cost_a,
         cost_b=cost_b,
+        metrics_a=metrics_a,
+        metrics_b=metrics_b,
+        boundary_agreement=boundary_agreement,
     )
+
+
+def _calculate_metrics(segments: List[SegmentResult], total_duration_ms: int) -> SegmentQualityMetrics:
+    """Calculate quality metrics for a set of segments."""
+    import statistics
+    
+    if not segments:
+        return SegmentQualityMetrics(
+            segment_count=0, avg_duration_min=0, duration_std_min=0,
+            coverage_pct=0, avg_summary_length=0, avg_tags_per_segment=0,
+            unique_tags=0, density_mean=0, density_std=0, specificity_score=0
+        )
+    
+    # Duration metrics
+    durations_min = [(s.end_ms - s.start_ms) / 60000 for s in segments]
+    avg_duration = statistics.mean(durations_min)
+    duration_std = statistics.stdev(durations_min) if len(durations_min) > 1 else 0
+    
+    # Coverage
+    covered_ms = sum(s.end_ms - s.start_ms for s in segments)
+    coverage_pct = (covered_ms / total_duration_ms * 100) if total_duration_ms > 0 else 0
+    
+    # Summary metrics
+    summary_lengths = [len(s.summary.split()) for s in segments]
+    avg_summary_length = statistics.mean(summary_lengths)
+    
+    # Tag metrics
+    all_tags = [tag for s in segments for tag in s.topic_tags]
+    avg_tags = len(all_tags) / len(segments) if segments else 0
+    unique_tags = len(set(all_tags))
+    
+    # Density metrics
+    densities = [s.density_score for s in segments]
+    density_mean = statistics.mean(densities)
+    density_std = statistics.stdev(densities) if len(densities) > 1 else 0
+    
+    # Specificity score - based on summary detail and tag uniqueness
+    # Higher if: longer summaries, more unique tags, varied density scores
+    specificity_score = min(1.0, (
+        (avg_summary_length / 30) * 0.4 +  # ~30 words is good
+        (unique_tags / max(len(segments), 1)) * 0.3 +  # Unique tags per segment
+        (density_std * 2) * 0.3  # Variance suggests nuanced scoring
+    ))
+    
+    return SegmentQualityMetrics(
+        segment_count=len(segments),
+        avg_duration_min=round(avg_duration, 1),
+        duration_std_min=round(duration_std, 1),
+        coverage_pct=round(coverage_pct, 1),
+        avg_summary_length=round(avg_summary_length, 1),
+        avg_tags_per_segment=round(avg_tags, 1),
+        unique_tags=unique_tags,
+        density_mean=round(density_mean, 2),
+        density_std=round(density_std, 2),
+        specificity_score=round(specificity_score, 2),
+    )
+
+
+def _calculate_boundary_agreement(
+    segments_a: List[SegmentResult],
+    segments_b: List[SegmentResult],
+    total_duration_ms: int
+) -> float:
+    """
+    Calculate how much the segment boundaries agree between two models.
+    Returns 0-1 where 1 = perfect agreement.
+    """
+    if not segments_a or not segments_b or total_duration_ms == 0:
+        return 0.0
+    
+    # Create binary timeline (1 = in segment, 0 = not)
+    # Sample at 1-second resolution
+    resolution_ms = 1000
+    timeline_length = total_duration_ms // resolution_ms + 1
+    
+    def make_timeline(segments: List[SegmentResult]) -> List[int]:
+        timeline = [0] * timeline_length
+        for s in segments:
+            start_idx = s.start_ms // resolution_ms
+            end_idx = min(s.end_ms // resolution_ms, timeline_length - 1)
+            for i in range(start_idx, end_idx + 1):
+                timeline[i] = 1
+        return timeline
+    
+    timeline_a = make_timeline(segments_a)
+    timeline_b = make_timeline(segments_b)
+    
+    # Calculate agreement (Jaccard similarity)
+    both = sum(1 for a, b in zip(timeline_a, timeline_b) if a == 1 and b == 1)
+    either = sum(1 for a, b in zip(timeline_a, timeline_b) if a == 1 or b == 1)
+    
+    return round(both / either, 2) if either > 0 else 0.0

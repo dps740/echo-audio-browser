@@ -96,6 +96,11 @@ def _prepare_transcript_with_times(transcript: TranscriptResult) -> str:
     current_minute = -1
     current_line = []
     
+    print(f"[DEBUG] Preparing transcript with {len(transcript.words)} words")
+    if transcript.words:
+        print(f"[DEBUG] First word type: {type(transcript.words[0])}")
+        print(f"[DEBUG] First word: {transcript.words[0]}")
+    
     for word in transcript.words:
         minute = word.start_ms // 60000
         if minute > current_minute:
@@ -114,23 +119,28 @@ def _prepare_transcript_with_times(transcript: TranscriptResult) -> str:
 async def _segment_with_openai(transcript_text: str) -> List[Dict]:
     """Use OpenAI GPT to segment."""
     print(f"[DEBUG] Calling OpenAI {settings.segmentation_model} with {len(transcript_text)} chars")
-    client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
     
-    response = await client.chat.completions.create(
-        model=settings.segmentation_model,
-        messages=[
-            {
-                "role": "user",
-                "content": SEGMENTATION_PROMPT.format(transcript=transcript_text[:50000])  # Limit length
-            }
-        ],
-        temperature=0.3,
-        response_format={"type": "json_object"},
-    )
-    
-    content = response.choices[0].message.content
-    print(f"[DEBUG] OpenAI response length: {len(content)} chars")
-    print(f"[DEBUG] OpenAI response preview: {content[:500]}...")
+    try:
+        client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+        
+        response = await client.chat.completions.create(
+            model=settings.segmentation_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": SEGMENTATION_PROMPT.format(transcript=transcript_text[:50000])  # Limit length
+                }
+            ],
+            temperature=0.3,
+            response_format={"type": "json_object"},
+        )
+        
+        content = response.choices[0].message.content
+        print(f"[DEBUG] OpenAI response length: {len(content)} chars")
+        print(f"[DEBUG] OpenAI response preview: {content[:500]}...")
+    except Exception as api_error:
+        print(f"[DEBUG] OpenAI API call failed: {api_error}")
+        raise
     
     # Parse JSON
     try:
@@ -189,9 +199,17 @@ def _parse_segments(segments_json: List[Dict], transcript: TranscriptResult) -> 
     """Convert JSON segments to SegmentResult objects with transcript text."""
     results = []
     print(f"[DEBUG] Parsing {len(segments_json)} segments")
+    print(f"[DEBUG] segments_json type: {type(segments_json)}")
+    if segments_json:
+        print(f"[DEBUG] First segment type: {type(segments_json[0])}")
+        print(f"[DEBUG] First segment: {str(segments_json[0])[:200]}")
     
     for i, seg in enumerate(segments_json):
         try:
+            print(f"[DEBUG] Processing segment {i}, type: {type(seg)}")
+            if isinstance(seg, str):
+                print(f"[DEBUG] ERROR: segment is a string, not dict: {seg[:100]}")
+                raise ValueError(f"Segment {i} is a string, not dict")
             start_ms = seg.get("start_ms", 0)
             end_ms = seg.get("end_ms", 0)
             

@@ -113,6 +113,7 @@ def _prepare_transcript_with_times(transcript: TranscriptResult) -> str:
 
 async def _segment_with_openai(transcript_text: str) -> List[Dict]:
     """Use OpenAI GPT to segment."""
+    print(f"[DEBUG] Calling OpenAI {settings.segmentation_model} with {len(transcript_text)} chars")
     client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
     
     response = await client.chat.completions.create(
@@ -128,17 +129,24 @@ async def _segment_with_openai(transcript_text: str) -> List[Dict]:
     )
     
     content = response.choices[0].message.content
+    print(f"[DEBUG] OpenAI response length: {len(content)} chars")
+    print(f"[DEBUG] OpenAI response preview: {content[:500]}...")
     
     # Parse JSON
     try:
         data = json.loads(content)
+        print(f"[DEBUG] Parsed JSON type: {type(data)}, keys: {data.keys() if isinstance(data, dict) else 'N/A'}")
         if isinstance(data, dict) and "segments" in data:
+            print(f"[DEBUG] Found {len(data['segments'])} segments in response")
             return data["segments"]
         elif isinstance(data, list):
+            print(f"[DEBUG] Response is list with {len(data)} items")
             return data
         else:
-            raise ValueError("Unexpected response format")
+            raise ValueError(f"Unexpected response format: {type(data)}")
     except json.JSONDecodeError as e:
+        print(f"[DEBUG] JSON decode failed: {e}")
+        print(f"[DEBUG] Raw content: {content[:1000]}")
         raise ValueError(f"Failed to parse LLM response: {e}")
 
 
@@ -180,27 +188,34 @@ async def _segment_with_claude(transcript_text: str) -> List[Dict]:
 def _parse_segments(segments_json: List[Dict], transcript: TranscriptResult) -> List[SegmentResult]:
     """Convert JSON segments to SegmentResult objects with transcript text."""
     results = []
+    print(f"[DEBUG] Parsing {len(segments_json)} segments")
     
-    for seg in segments_json:
-        start_ms = seg.get("start_ms", 0)
-        end_ms = seg.get("end_ms", 0)
-        
-        # Extract transcript text for this segment
-        segment_words = [
-            w.word for w in transcript.words
-            if w.start_ms >= start_ms and w.end_ms <= end_ms
-        ]
-        transcript_text = " ".join(segment_words)
-        
-        results.append(SegmentResult(
-            start_ms=start_ms,
-            end_ms=end_ms,
-            summary=seg.get("summary", ""),
-            topic_tags=seg.get("topic_tags", []),
-            density_score=float(seg.get("density_score", 0.5)),
-            transcript_text=transcript_text,
-        ))
+    for i, seg in enumerate(segments_json):
+        try:
+            start_ms = seg.get("start_ms", 0)
+            end_ms = seg.get("end_ms", 0)
+            
+            # Extract transcript text for this segment
+            segment_words = [
+                w.word for w in transcript.words
+                if w.start_ms >= start_ms and w.end_ms <= end_ms
+            ]
+            transcript_text = " ".join(segment_words)
+            
+            results.append(SegmentResult(
+                start_ms=start_ms,
+                end_ms=end_ms,
+                summary=seg.get("summary", ""),
+                topic_tags=seg.get("topic_tags", []),
+                density_score=float(seg.get("density_score", 0.5)),
+                transcript_text=transcript_text,
+            ))
+        except Exception as e:
+            print(f"[DEBUG] Error parsing segment {i}: {e}")
+            print(f"[DEBUG] Segment data: {seg}")
+            raise
     
+    print(f"[DEBUG] Successfully parsed {len(results)} segments")
     return results
 
 

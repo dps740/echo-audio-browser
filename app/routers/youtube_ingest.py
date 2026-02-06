@@ -234,9 +234,15 @@ def _ingest_to_chromadb(episode_id, title, podcast, audio_url, segments, source=
     
     # Use LLM segmentation for smart chunking
     try:
+        print(f"[DEBUG] Starting LLM segmentation for: {title}")
+        print(f"[DEBUG] Transcript has {len(transcript.words)} words, {transcript.duration_ms}ms duration")
         llm_segments = asyncio.run(segment_transcript(transcript, title))
+        print(f"[DEBUG] LLM segmentation returned {len(llm_segments)} segments")
     except Exception as e:
-        print(f"LLM segmentation failed: {e}, falling back to simple chunking")
+        import traceback
+        print(f"LLM segmentation failed: {e}")
+        print(f"[DEBUG] Full traceback:\n{traceback.format_exc()}")
+        print("Falling back to simple chunking")
         # Fallback to dumb chunking if LLM fails
         llm_segments = _fallback_chunking(segments)
     

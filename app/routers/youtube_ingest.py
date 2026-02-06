@@ -1163,7 +1163,7 @@ class DownloadTranscribeRequest(BaseModel):
     channel: str
     podcast_name: Optional[str] = None
     limit: int = 10
-    whisper_model: str = "base"  # tiny, base, small, medium, large
+    whisper_model: str = "tiny"  # tiny, base, small, medium, large
 
 
 def _save_transcript(video_id: str, title: str, podcast: str, segments: list, output_dir: str):
@@ -1205,7 +1205,7 @@ def _save_transcript(video_id: str, title: str, podcast: str, segments: list, ou
     return txt_path, json_path
 
 
-def _transcribe_with_whisper(audio_path: str, output_dir: str, model: str = "base") -> list:
+def _transcribe_with_whisper(audio_path: str, output_dir: str, model: str = "tiny") -> list:
     """
     Transcribe audio file using faster-whisper with CUDA + int8.
     Falls back to CPU if CUDA unavailable.
@@ -1267,7 +1267,7 @@ def _transcribe_with_whisper(audio_path: str, output_dir: str, model: str = "bas
     return segments
 
 
-def _download_transcribe_channel(job_id: str, channel: str, podcast_name: Optional[str], limit: int, whisper_model: str = "base"):
+def _download_transcribe_channel(job_id: str, channel: str, podcast_name: Optional[str], limit: int, whisper_model: str = "tiny"):
     """Background: download and transcribe videos from a channel using Whisper (no indexing)."""
     try:
         output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "transcripts")

@@ -132,14 +132,16 @@ async def _segment_with_openai(transcript_text: str) -> List[Dict]:
                 }
             ],
             temperature=0.3,
-            response_format={"type": "json_object"},
         )
         
         content = response.choices[0].message.content
         print(f"[DEBUG] OpenAI response length: {len(content)} chars")
         print(f"[DEBUG] OpenAI response preview: {content[:500]}...")
     except Exception as api_error:
+        import traceback
         print(f"[DEBUG] OpenAI API call failed: {api_error}")
+        print(f"[DEBUG] Exception type: {type(api_error)}")
+        print(f"[DEBUG] Full traceback:\n{traceback.format_exc()}")
         raise
     
     # Parse JSON

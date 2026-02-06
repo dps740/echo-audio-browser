@@ -166,3 +166,166 @@ async def delete_episode(episode_id: str):
         "episode_id": episode_id,
         "segments_removed": len(results["ids"]),
     }
+
+
+@router.get("/diagnostics")
+async def get_diagnostics():
+    """
+    Get detailed diagnostics about segment quality.
+    
+    Use this to verify that LLM segmentation is working properly.
+    Healthy segments should have:
+    - Summaries > 100 chars (detailed descriptions)
+    - 2+ tags per segment
+    - Specific tags (not generic like "AI" or "technology")
+    - Density scores between 0.3-0.9
+    """
+    collection = _get_collection()
+    total = collection.count()
+    
+    if total == 0:
+        return {
+            "status": "empty",
+            "message": "No segments in database",
+            "total_segments": 0,
+        }
+    
+    # Fetch all metadata
+    results = collection.get(include=["metadatas", "documents"])
+    
+    # Analyze segment quality
+    summaries = []
+    all_tags = []
+    tag_counts = []
+    densities = []
+    summary_lengths = []
+    transcript_lengths = []
+    
+    generic_tags = {"ai", "technology", "business", "science", "philosophy", 
+                   "discussion", "conversation", "interview", "podcast", 
+                   "machine learning", "tech", "life", "work", "people"}
+    
+    episodes_seen = set()
+    
+    for i, meta in enumerate(results["metadatas"]):
+        summary = meta.get("summary", "")
+        tags_str = meta.get("topic_tags", "")
+        tags = [t.strip() for t in tags_str.split(",") if t.strip()] if tags_str else []
+        density = meta.get("density_score", 0)
+        transcript = results["documents"][i] if results["documents"] else ""
+        
+        summaries.append(summary)
+        summary_lengths.append(len(summary))
+        transcript_lengths.append(len(transcript))
+        all_tags.extend(tags)
+        tag_counts.append(len(tags))
+        densities.append(density)
+        episodes_seen.add(meta.get("episode_id", "unknown"))
+    
+    # Calculate quality metrics
+    avg_summary_length = sum(summary_lengths) / len(summary_lengths) if summary_lengths else 0
+    avg_tags = sum(tag_counts) / len(tag_counts) if tag_counts else 0
+    avg_density = sum(densities) / len(densities) if densities else 0
+    avg_transcript_length = sum(transcript_lengths) / len(transcript_lengths) if transcript_lengths else 0
+    
+    # Count problem segments
+    short_summaries = sum(1 for l in summary_lengths if l < 100)
+    no_tags = sum(1 for c in tag_counts if c == 0)
+    generic_only = sum(1 for i, c in enumerate(tag_counts) if c > 0 and all(
+        t.lower() in generic_tags for t in (results["metadatas"][i].get("topic_tags", "").split(",") if results["metadatas"][i].get("topic_tags") else [])
+    ))
+    
+    # Unique vs generic tags
+    unique_tags = list(set(all_tags))
+    specific_tags = [t for t in unique_tags if t.lower() not in generic_tags and len(t.split()) >= 2]
+    generic_found = [t for t in unique_tags if t.lower() in generic_tags]
+    
+    # Quality score (0-100)
+    quality_score = 0
+    quality_issues = []
+    
+    # Check summary quality (40 points)
+    if avg_summary_length >= 150:
+        quality_score += 40
+    elif avg_summary_length >= 100:
+        quality_score += 25
+        quality_issues.append(f"Summaries could be longer (avg {avg_summary_length:.0f} chars, target 150+)")
+    else:
+        quality_score += 10
+        quality_issues.append(f"⚠️ Summaries too short (avg {avg_summary_length:.0f} chars) - LLM segmentation may not be running")
+    
+    # Check tag quality (30 points)
+    if avg_tags >= 2 and len(specific_tags) >= len(unique_tags) * 0.5:
+        quality_score += 30
+    elif avg_tags >= 1:
+        quality_score += 15
+        quality_issues.append(f"Tags could be more specific ({len(specific_tags)} specific vs {len(generic_found)} generic)")
+    else:
+        quality_issues.append(f"⚠️ Missing or generic tags - LLM segmentation may not be running")
+    
+    # Check density scores (15 points)
+    if 0.3 <= avg_density <= 0.8:
+        quality_score += 15
+    elif avg_density > 0:
+        quality_score += 8
+    else:
+        quality_issues.append("⚠️ No density scores - basic chunking used instead of LLM")
+    
+    # Check coverage (15 points)
+    if short_summaries < total * 0.2:
+        quality_score += 15
+    elif short_summaries < total * 0.5:
+        quality_score += 8
+        quality_issues.append(f"{short_summaries}/{total} segments have short summaries (<100 chars)")
+    else:
+        quality_issues.append(f"⚠️ {short_summaries}/{total} segments have short summaries - likely basic chunking")
+    
+    # Determine status
+    if quality_score >= 80:
+        status = "healthy"
+        message = "✅ Segments are well-formed with detailed summaries and specific tags"
+    elif quality_score >= 50:
+        status = "needs_improvement"
+        message = "⚠️ Segments exist but quality could be improved"
+    else:
+        status = "poor"
+        message = "❌ Segment quality is poor - likely using basic chunking instead of LLM segmentation"
+    
+    return {
+        "status": status,
+        "quality_score": quality_score,
+        "message": message,
+        "issues": quality_issues,
+        "stats": {
+            "total_segments": total,
+            "total_episodes": len(episodes_seen),
+            "avg_summary_length": round(avg_summary_length, 1),
+            "avg_transcript_length": round(avg_transcript_length, 1),
+            "avg_tags_per_segment": round(avg_tags, 2),
+            "avg_density_score": round(avg_density, 3),
+            "segments_with_no_tags": no_tags,
+            "segments_with_short_summaries": short_summaries,
+            "segments_with_only_generic_tags": generic_only,
+        },
+        "tags": {
+            "total_unique": len(unique_tags),
+            "specific_tags": specific_tags[:20],
+            "generic_tags_found": generic_found,
+        },
+        "sample_segments": [
+            {
+                "summary": results["metadatas"][i].get("summary", "")[:200],
+                "tags": results["metadatas"][i].get("topic_tags", ""),
+                "density": results["metadatas"][i].get("density_score", 0),
+                "transcript_preview": (results["documents"][i] if results["documents"] else "")[:150] + "...",
+            }
+            for i in range(min(3, total))
+        ],
+        "recommendation": (
+            "Run the nuke_and_reingest.py script to re-process all episodes with improved LLM segmentation"
+            if quality_score < 50 else
+            "Consider re-ingesting episodes with poor segments"
+            if quality_score < 80 else
+            "Segments look good!"
+        ),
+    }

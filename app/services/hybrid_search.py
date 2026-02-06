@@ -65,13 +65,14 @@ def hybrid_search(
     chroma_path: str = "./chroma_data",
     min_density: float = 0.0,
     diversity: bool = False,
+    min_relevance: float = 0.3,
 ) -> List[Dict[str, Any]]:
     """
     Full 5-step hybrid search pipeline:
     1. Semantic search → top 50 candidates
     2. Keyword filter & boost
     3. Diversity filter (max 3 per episode, max 4 per podcast)
-    4. Quality filter (min score threshold)
+    4. Quality filter (min relevance threshold)
     5. Return top N
     
     Args:
@@ -80,6 +81,8 @@ def hybrid_search(
         chroma_path: Path to ChromaDB storage
         min_density: Minimum density score filter
         diversity: Apply diversity filtering
+        min_relevance: Minimum relevance score (0-1). Results below this are discarded.
+                      Default 0.3 filters out poor semantic matches.
         
     Returns:
         List of ranked segments with relevance scores
@@ -202,14 +205,18 @@ def hybrid_search(
         
         scored_segments = diverse_segments
     
-    # Step 4: Quality filter - minimum score threshold
-    # Only apply if we have enough results
-    if len(scored_segments) > limit:
+    # Step 4: Quality filter - minimum relevance threshold
+    # Filter out low-quality matches that don't meet minimum relevance
+    if min_relevance > 0:
+        scored_segments = [s for s in scored_segments if s['relevance_score'] >= min_relevance]
+    
+    # Additional dynamic threshold if we still have many results
+    if len(scored_segments) > limit * 2:
         # Calculate dynamic threshold (median score of top results)
         sorted_scores = sorted([s['relevance_score'] for s in scored_segments[:limit * 2]], reverse=True)
         if sorted_scores:
-            min_threshold = sorted_scores[len(sorted_scores) // 2] * 0.5
-            scored_segments = [s for s in scored_segments if s['relevance_score'] >= min_threshold]
+            dynamic_threshold = max(min_relevance, sorted_scores[len(sorted_scores) // 2] * 0.5)
+            scored_segments = [s for s in scored_segments if s['relevance_score'] >= dynamic_threshold]
     
     # Step 5: Return top N
     return scored_segments[:limit]

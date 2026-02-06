@@ -28,6 +28,7 @@ async def search(
     q: str,
     limit: int = 20,
     min_density: float = 0.0,
+    min_relevance: float = 0.3,
     topic: Optional[str] = None,
 ):
     """
@@ -36,9 +37,11 @@ async def search(
     - **q**: Search query
     - **limit**: Max results (default 20)
     - **min_density**: Minimum density score filter (0-1)
+    - **min_relevance**: Minimum relevance score (0-1). Results below this threshold are discarded.
+                        Default 0.3 filters out poor semantic matches.
     - **topic**: Filter by specific topic tag
     """
-    results = hybrid_search(query=q, limit=limit) if True else await search_segments(
+    results = hybrid_search(query=q, limit=limit, min_density=min_density, min_relevance=min_relevance) if True else await search_segments(
         query=q,
         limit=limit,
         min_density=min_density,

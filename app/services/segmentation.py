@@ -36,7 +36,7 @@ Your task:
 1. Identify 5-15 segments of 2-10 minutes each
 2. Each segment should be a complete discussion of one topic
 3. Rate each segment's "density score" (0.0-1.0) - how much valuable information vs filler/tangents
-4. Assign 1-3 topic tags per segment
+4. Assign 2-4 SPECIFIC topic tags per segment
 
 Rules:
 - Segments should not overlap
@@ -44,13 +44,26 @@ Rules:
 - Higher density = more actionable information, insights, or arguments
 - Lower density = small talk, lengthy anecdotes, repeated content
 
+CRITICAL REQUIREMENTS FOR SUMMARIES:
+- Write 3-4 sentences capturing the SPECIFIC argument, claim, or insight discussed
+- Include names of people, companies, or concepts mentioned
+- Include specific numbers, dates, predictions, or claims made
+- Generic summaries like "discussion of AI" or "talks about technology" are NOT acceptable
+- Each summary must be detailed enough that someone could understand the key insight without listening
+
+CRITICAL REQUIREMENTS FOR TAGS:
+- Tags MUST be specific topics, not broad categories
+- BAD tags: "AI", "technology", "business", "philosophy", "science"
+- GOOD tags: "AGI timeline predictions", "transformer scaling laws", "YC application advice", "Stoic death meditation", "Bitcoin ETF impact"
+- Each tag should be 2-5 words describing a specific subtopic
+
 Return JSON array:
 [
   {{
     "start_ms": 0,
     "end_ms": 180000,
-    "summary": "Brief 1-2 sentence summary of the segment",
-    "topic_tags": ["AI", "Machine Learning"],
+    "summary": "Detailed 3-4 sentence summary capturing the SPECIFIC argument, claim, or insight discussed. Include names, numbers, and concrete details.",
+    "topic_tags": ["specific subtopic 1", "specific subtopic 2"],
     "density_score": 0.8
   }}
 ]

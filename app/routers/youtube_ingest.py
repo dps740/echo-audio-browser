@@ -195,6 +195,45 @@ def _download_audio(url: str, video_id: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else url
 
 
+def _segments_to_words(segments: list) -> list:
+    """
+    Convert VTT subtitle segments into individual word-level tokens.
+    
+    VTT files have phrase-level timing, but the segmentation module needs
+    word-level tokens for accurate quote anchor matching.
+    """
+    from app.services.transcription import TranscriptWord
+    
+    words = []
+    for seg in segments:
+        # Clean up text - remove HTML entities and speaker markers
+        text = seg["text"]
+        text = text.replace("&gt;", ">").replace("&lt;", "<")
+        # Remove >> speaker markers for cleaner word extraction
+        text = text.replace(">>", "").replace("> >", "")
+        
+        # Split into individual words
+        seg_words = text.split()
+        if not seg_words:
+            continue
+        
+        # Distribute time evenly among words in this segment
+        duration = seg["end_ms"] - seg["start_ms"]
+        word_duration = duration / len(seg_words) if seg_words else duration
+        
+        for i, word in enumerate(seg_words):
+            word_start = seg["start_ms"] + int(i * word_duration)
+            word_end = seg["start_ms"] + int((i + 1) * word_duration)
+            words.append(TranscriptWord(
+                word=word,
+                start_ms=word_start,
+                end_ms=word_end,
+                confidence=1.0
+            ))
+    
+    return words
+
+
 def _ingest_to_chromadb(episode_id, title, podcast, audio_url, segments, source="youtube"):
     """Store segments in ChromaDB using LLM segmentation and enrichment."""
     import chromadb
@@ -211,16 +250,9 @@ def _ingest_to_chromadb(episode_id, title, podcast, audio_url, segments, source=
         embedding_function=embedding_fn
     )
     
-    # Convert caption segments to TranscriptResult for LLM segmentation
-    transcript_words = [
-        TranscriptWord(
-            word=seg["text"],
-            start_ms=seg["start_ms"],
-            end_ms=seg["end_ms"],
-            confidence=1.0
-        )
-        for seg in segments
-    ]
+    # Convert caption segments to individual word-level TranscriptWords
+    # This enables accurate quote anchor matching in segmentation
+    transcript_words = _segments_to_words(segments)
     
     # Calculate total duration from segments
     total_duration_ms = max([seg["end_ms"] for seg in segments]) if segments else 0
@@ -1121,3 +1153,206 @@ TRANSCRIPT: {transcript}"""
     except Exception as e:
         _jobs[job_id]["status"] = "failed"
         _jobs[job_id]["error"] = str(e)[:300]
+
+
+# =============================================================================
+# Download & Transcribe Only (no ChromaDB ingestion)
+# =============================================================================
+
+class DownloadTranscribeRequest(BaseModel):
+    channel: str
+    podcast_name: Optional[str] = None
+    limit: int = 10
+
+
+def _save_transcript(video_id: str, title: str, podcast: str, segments: list, output_dir: str):
+    """Save transcript to files (txt and json)."""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Sanitize filename
+    safe_title = re.sub(r'[<>:"/\\|?*]', '', title)
+    safe_title = re.sub(r'\s+', '_', safe_title)[:80]
+    
+    timestamp = datetime.now().strftime("%Y%m%d")
+    base_name = f"{timestamp}_{safe_title}"
+    
+    # Full transcript text
+    full_text = " ".join([seg["text"] for seg in segments])
+    
+    # Save plain text
+    txt_path = os.path.join(output_dir, f"{base_name}.txt")
+    with open(txt_path, 'w', encoding='utf-8') as f:
+        f.write(f"Title: {title}\n")
+        f.write(f"Podcast: {podcast}\n")
+        f.write(f"Video ID: {video_id}\n")
+        f.write(f"Duration: {segments[-1]['end_ms'] // 1000 if segments else 0} seconds\n")
+        f.write("=" * 60 + "\n\n")
+        f.write(full_text)
+    
+    # Save JSON with timestamps
+    json_path = os.path.join(output_dir, f"{base_name}.json")
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump({
+            "video_id": video_id,
+            "title": title,
+            "podcast": podcast,
+            "segments": segments,
+            "full_text": full_text,
+            "duration_ms": segments[-1]['end_ms'] if segments else 0,
+        }, f, indent=2)
+    
+    return txt_path, json_path
+
+
+def _download_transcribe_channel(job_id: str, channel: str, podcast_name: Optional[str], limit: int):
+    """Background: download and transcribe videos from a channel (no indexing)."""
+    try:
+        output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "transcripts")
+        
+        _jobs[job_id]["status"] = "listing_videos"
+        _jobs[job_id]["output_dir"] = output_dir
+        
+        # Get video list
+        cmd = [
+            "yt-dlp", "--flat-playlist", "--dump-json",
+            f"https://www.youtube.com/{channel}/videos",
+            "--playlist-end", str(limit)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        
+        videos = []
+        for line in result.stdout.strip().split('\n'):
+            if line:
+                try:
+                    data = json.loads(line)
+                    vid = {
+                        "id": data.get("id"),
+                        "title": data.get("title", "Unknown"),
+                        "url": f"https://www.youtube.com/watch?v={data['id']}",
+                        "duration": data.get("duration"),
+                    }
+                    # Skip short videos (< 5 min)
+                    if vid.get("duration") and vid["duration"] < 300:
+                        continue
+                    videos.append(vid)
+                except json.JSONDecodeError:
+                    continue
+        
+        if not videos:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = "No videos found"
+            return
+        
+        _jobs[job_id]["total_videos"] = len(videos)
+        _jobs[job_id]["status"] = "downloading"
+        _jobs[job_id]["videos"] = []
+        
+        name = podcast_name or channel
+        success = 0
+        failed = 0
+        transcripts = []
+        
+        for i, video in enumerate(videos):
+            vid_status = {
+                "id": video["id"],
+                "title": video["title"],
+                "status": "processing",
+                "index": i + 1,
+            }
+            _jobs[job_id]["videos"].append(vid_status)
+            _jobs[job_id]["current_video"] = i + 1
+            
+            try:
+                url = video["url"]
+                video_id = video["id"]
+                
+                # Get captions
+                segments = _get_captions(url)
+                if not segments:
+                    vid_status["status"] = "no_captions"
+                    failed += 1
+                    continue
+                
+                # Download audio
+                audio_path = _download_audio(url, video_id)
+                
+                # Save transcript files
+                txt_path, json_path = _save_transcript(video_id, video["title"], name, segments, output_dir)
+                
+                vid_status["status"] = "complete"
+                vid_status["transcript"] = txt_path
+                transcripts.append({
+                    "video_id": video_id,
+                    "title": video["title"],
+                    "txt": txt_path,
+                    "json": json_path,
+                    "audio": audio_path,
+                })
+                success += 1
+                
+                time.sleep(1)  # Rate limit
+                
+            except Exception as e:
+                vid_status["status"] = "failed"
+                vid_status["error"] = str(e)[:100]
+                failed += 1
+        
+        _jobs[job_id]["status"] = "complete"
+        _jobs[job_id]["success"] = success
+        _jobs[job_id]["failed"] = failed
+        _jobs[job_id]["transcripts"] = transcripts
+        _jobs[job_id]["completed_at"] = datetime.utcnow().isoformat()
+        
+    except Exception as e:
+        _jobs[job_id]["status"] = "failed"
+        _jobs[job_id]["error"] = str(e)[:300]
+
+
+@router.post("/download-transcribe")
+async def download_transcribe_channel(request: DownloadTranscribeRequest, background_tasks: BackgroundTasks):
+    """
+    Download and transcribe videos from a channel WITHOUT indexing to ChromaDB.
+    Outputs raw transcript files (txt + json) to app/transcripts/ folder.
+    """
+    global _job_counter
+    _job_counter += 1
+    job_id = f"transcribe_{_job_counter}_{int(time.time())}"
+    
+    _jobs[job_id] = {
+        "job_id": job_id,
+        "type": "download_transcribe",
+        "channel": request.channel,
+        "limit": request.limit,
+        "status": "queued",
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    
+    background_tasks.add_task(
+        _download_transcribe_channel, job_id, request.channel, request.podcast_name, request.limit
+    )
+    
+    return {"job_id": job_id, "status": "queued"}
+
+
+@router.get("/transcripts")
+async def list_transcripts():
+    """List all downloaded transcripts."""
+    transcript_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "transcripts")
+    if not os.path.exists(transcript_dir):
+        return {"transcripts": [], "path": transcript_dir}
+    
+    transcripts = []
+    for f in Path(transcript_dir).glob("*.txt"):
+        json_file = f.with_suffix(".json")
+        transcripts.append({
+            "txt": str(f),
+            "json": str(json_file) if json_file.exists() else None,
+            "name": f.stem,
+            "size_kb": f.stat().st_size // 1024,
+        })
+    
+    return {
+        "transcripts": sorted(transcripts, key=lambda x: x["name"], reverse=True),
+        "path": transcript_dir,
+        "count": len(transcripts),
+    }

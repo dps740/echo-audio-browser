@@ -425,8 +425,12 @@
                     <input type="text" id="ingest-channel" placeholder="@channel_handle">
                     <input type="number" id="ingest-limit" value="10" min="1" max="100" style="max-width: 100px;">
                     <button class="btn btn-primary" onclick="ingestChannel()">Ingest Channel</button>
+                    <button class="btn" onclick="downloadTranscribeChannel()" style="background: var(--bg-tertiary);" title="Download audio + transcripts only (no indexing)">📥 Download Only</button>
                 </div>
             </div>
+            <p style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">
+                💡 <strong>Download Only</strong> saves audio + transcripts to <code>app/transcripts/</code> without indexing. Upload to Google Drive for processing.
+            </p>
         </div>
 
         <!-- Scan Local -->
@@ -881,6 +885,28 @@
         }
     }
 
+    async function downloadTranscribeChannel() {
+        const channel = document.getElementById('ingest-channel').value.trim();
+        if (!channel) {
+            alert('Enter a channel handle (e.g., @lexfridman)');
+            return;
+        }
+        const limit = parseInt(document.getElementById('ingest-limit').value) || 10;
+        const name = document.getElementById('ingest-podcast-name').value.trim() || undefined;
+
+        try {
+            await api('/ingest/youtube/download-transcribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ channel, podcast_name: name, limit }),
+            });
+            document.getElementById('ingest-channel').value = '';
+            refreshJobs();
+        } catch (e) {
+            alert('Failed to start download: ' + e.message);
+        }
+    }
+
     let jobRefreshInterval = null;
 
     async function refreshJobs() {
@@ -914,6 +940,7 @@
             fetching_info: ['🔍', 'Fetching info...', 'badge-info'],
             extracting_captions: ['📝', 'Extracting captions...', 'badge-info'],
             downloading_audio: ['⬇️', 'Downloading audio...', 'badge-info'],
+            downloading: ['📥', 'Downloading...', 'badge-info'],
             indexing: ['📊', 'Indexing...', 'badge-info'],
             listing_videos: ['📋', 'Listing videos...', 'badge-info'],
             ingesting: ['🔄', 'Ingesting...', 'badge-info'],
@@ -982,6 +1009,30 @@
                         <span class="list-item-badge ${v.status === 'complete' ? 'badge-success' : v.status === 'skipped' ? 'badge-warning' : v.status === 'failed' || v.status === 'no_captions' ? 'badge-danger' : 'badge-info'}">${v.status}</span>
                     </div>
                 `).join('')}</div>`;
+            }
+        }
+
+        // Download & Transcribe progress
+        if (j.type === 'download_transcribe' && j.total_videos) {
+            const done = j.current_video || 0;
+            const pct = Math.round((done / j.total_videos) * 100);
+            details += `
+                <div class="job-progress">
+                    <span style="font-size:13px;color:var(--text-secondary)">📥 ${done} / ${j.total_videos} videos downloaded</span>
+                    <div class="job-progress-bar"><div class="job-progress-fill" style="width:${pct}%"></div></div>
+                </div>
+            `;
+            if (j.videos && j.videos.length) {
+                const recent = j.videos.slice(-5).reverse();
+                details += `<div class="job-videos">${recent.map(v => `
+                    <div class="job-video">
+                        <span>${esc((v.title || '').substring(0, 50))}</span>
+                        <span class="list-item-badge ${v.status === 'complete' ? 'badge-success' : v.status === 'failed' || v.status === 'no_captions' ? 'badge-danger' : 'badge-info'}">${v.status}</span>
+                    </div>
+                `).join('')}</div>`;
+            }
+            if (j.status === 'complete' && j.success) {
+                details += `<div style="margin-top:8px;font-size:13px;color:var(--success)">✅ ${j.success} transcripts saved to <code>app/transcripts/</code></div>`;
             }
         }
 

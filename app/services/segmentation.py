@@ -71,22 +71,27 @@ Mark each segment:
 QUOTE ANCHORS (CRITICAL - READ CAREFULLY)
 You must define WHERE each segment starts and ends using exact quotes from the transcript.
 
-starts_with = The FIRST words spoken when this topic BEGINS
-ends_with = The LAST words spoken BEFORE they move to a DIFFERENT topic
+starts_with = The FIRST words of a SENTENCE where this topic BEGINS (MUST start at sentence boundary!)
+ends_with = The LAST words of a SENTENCE spoken BEFORE they move to a DIFFERENT topic
+
+SENTENCE BOUNDARIES ARE MANDATORY:
+- starts_with MUST be the beginning of a sentence (after a period, question mark, or clear topic transition)
+- NEVER pick words from the middle of a sentence
+- Look for phrases like "So...", "Now...", "Let me...", "The thing about...", "What I think is..."
 
 IMPORTANT: These quotes define the BOUNDARIES of the ENTIRE discussion, not just one sentence!
 
-WRONG approach (too narrow):
+WRONG approach (mid-sentence start):
 - Topic is "Why Acquired podcast succeeded" (discussed for 2 minutes)
-- starts_with: "we've received a bunch of" (one sentence from the middle)
-- ends_with: "99% of podcasts do not" (same sentence)
-- Result: 10-second clip that misses most of the discussion!
+- starts_with: "we've received a bunch of" ← BAD! This is mid-sentence!
+- ends_with: "99% of podcasts do not" 
+- Result: Clip starts awkwardly mid-sentence, confusing the listener!
 
-CORRECT approach (full boundaries):
+CORRECT approach (sentence boundary start):
 - Topic is "Why Acquired podcast succeeded" (discussed for 2 minutes)  
-- starts_with: "So let me tell you why" (where they FIRST start discussing this)
-- ends_with: "and that's the real secret" (the LAST thing said before changing topics)
-- Result: Full 2-minute clip capturing the entire discussion!
+- starts_with: "So let me tell you why" ← GOOD! Starts a new sentence/thought
+- ends_with: "and that's the real secret." ← GOOD! Ends at sentence boundary
+- Result: Clean entry point, listener hears complete thought!
 
 Think of it like this:
 - starts_with = "Press play here"
@@ -186,6 +191,18 @@ def resolve_timestamps(
     return None, None, "failed"
 
 
+def _normalize_word(word: str) -> str:
+    """
+    Aggressively normalize a word for matching.
+    
+    Removes all punctuation, lowercases, and handles common variations.
+    """
+    import re
+    # Remove all non-alphanumeric characters
+    word = re.sub(r'[^a-z0-9]', '', word.lower())
+    return word
+
+
 def _find_quote_position(
     words: List[TranscriptWord],
     quote: str,
@@ -202,18 +219,18 @@ def _find_quote_position(
     Returns:
         (timestamp_ms, status) where status is 'exact' or 'failed'
     """
-    quote_words = quote.split()
+    quote_words = [_normalize_word(w) for w in quote.split() if _normalize_word(w)]
     if not quote_words:
         return None, "failed"
+    
+    # Pre-normalize all transcript words for faster comparison
+    normalized_words = [_normalize_word(w.word) for w in words]
     
     # Slide through transcript looking for match
     for i in range(len(words) - len(quote_words) + 1):
         match = True
         for j, qw in enumerate(quote_words):
-            # Strip punctuation for comparison
-            word_clean = words[i + j].word.lower().strip(".,!?\"'()-:;")
-            qw_clean = qw.strip(".,!?\"'()-:;")
-            if word_clean != qw_clean:
+            if normalized_words[i + j] != qw:
                 match = False
                 break
         
@@ -230,10 +247,14 @@ def _fuzzy_find_quote(
     words: List[TranscriptWord],
     quote: str,
     find_end: bool = False,
-    min_overlap: float = 0.6
+    min_overlap: float = 0.5
 ) -> Tuple[Optional[int], str]:
     """
     Fuzzy match a quote allowing for partial matches.
+    
+    Uses multiple strategies:
+    1. Sliding window with word-level matching (allowing gaps for filler words)
+    2. Consecutive word sequence matching (ignoring filler words like "uh", "um")
     
     Args:
         words: Transcript words
@@ -244,26 +265,43 @@ def _fuzzy_find_quote(
     Returns:
         (timestamp_ms, status) where status is 'fuzzy' or 'failed'
     """
-    quote_words = quote.split()
+    import difflib
+    
+    # Normalize quote words
+    quote_words = [_normalize_word(w) for w in quote.split() if _normalize_word(w)]
     if not quote_words:
         return None, "failed"
     
-    required_matches = max(2, int(len(quote_words) * min_overlap))
+    # Filter out common filler words for matching
+    filler_words = {'uh', 'um', 'ah', 'like', 'you', 'know', 'yeah', 'so', 'well', 'i', 'mean'}
+    content_quote_words = [w for w in quote_words if w not in filler_words]
+    
+    # Use content words if we have enough, otherwise use all
+    if len(content_quote_words) >= 2:
+        search_words = content_quote_words
+    else:
+        search_words = quote_words
+    
+    required_matches = max(2, int(len(search_words) * min_overlap))
     best_match_count = 0
     best_position = None
+    best_window_end = None
     
-    # Try different window sizes
-    for window_size in range(len(quote_words), len(quote_words) + 3):
+    # Pre-normalize all transcript words
+    normalized_words = [_normalize_word(w.word) for w in words]
+    
+    # Try different window sizes (allow some slack for filler words)
+    max_window = min(len(search_words) + 10, len(words))
+    for window_size in range(len(search_words), max_window):
         for i in range(len(words) - window_size + 1):
-            window_words = [w.word.lower().strip(".,!?\"'()-:;") for w in words[i:i + window_size]]
+            window = normalized_words[i:i + window_size]
             
             # Count matching words (in order, allowing gaps)
             matches = 0
             window_idx = 0
-            for qw in quote_words:
-                qw_clean = qw.strip(".,!?\"'()-:;")
-                while window_idx < len(window_words):
-                    if window_words[window_idx] == qw_clean:
+            for qw in search_words:
+                while window_idx < len(window):
+                    if window[window_idx] == qw:
                         matches += 1
                         window_idx += 1
                         break
@@ -271,6 +309,7 @@ def _fuzzy_find_quote(
             
             if matches > best_match_count and matches >= required_matches:
                 best_match_count = matches
+                best_window_end = i + window_size - 1
                 if find_end:
                     best_position = words[i + window_size - 1].end_ms
                 else:
@@ -278,6 +317,40 @@ def _fuzzy_find_quote(
     
     if best_position is not None:
         return best_position, "fuzzy"
+    
+    # Strategy 2: Use difflib SequenceMatcher for approximate string matching
+    # Build text windows and compare
+    window_text_size = len(' '.join(search_words)) + 20  # chars
+    full_text_normalized = ' '.join(normalized_words)
+    quote_text = ' '.join(search_words)
+    
+    best_ratio = 0.0
+    best_idx = None
+    
+    # Slide through transcript text looking for best match
+    for i in range(0, len(full_text_normalized) - len(quote_text), 10):  # step by 10 chars
+        window_text = full_text_normalized[i:i + len(quote_text) + 20]
+        ratio = difflib.SequenceMatcher(None, quote_text, window_text).ratio()
+        if ratio > best_ratio and ratio > 0.6:  # 60% similarity threshold
+            best_ratio = ratio
+            best_idx = i
+    
+    if best_idx is not None:
+        # Find the word index corresponding to this character position
+        char_count = 0
+        word_idx = 0
+        for idx, nw in enumerate(normalized_words):
+            if char_count >= best_idx:
+                word_idx = idx
+                break
+            char_count += len(nw) + 1  # +1 for space
+        
+        if find_end:
+            # Estimate end position
+            end_idx = min(word_idx + len(search_words) + 3, len(words) - 1)
+            return words[end_idx].end_ms, "fuzzy"
+        else:
+            return words[word_idx].start_ms, "fuzzy"
     
     return None, "failed"
 

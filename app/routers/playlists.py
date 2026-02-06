@@ -8,6 +8,7 @@ from datetime import datetime
 
 from app.models import PlaybackManifest, PlaybackSegment
 from app.services.hybrid_search import hybrid_search
+from app.services.smart_search import smart_search
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -31,14 +32,28 @@ async def get_topic_playlist(
     - **diverse**: Ensure segments from different podcasts (default true)
     """
     try:
-        # Use hybrid search instead of pure vector search
-        segments = hybrid_search(
+        # Use smart search with LLM relevance filtering
+        search_result = smart_search(
             query=topic,
             limit=limit,
-            chroma_path=settings.chroma_persist_dir,
-            min_density=min_density,
-            diversity=diverse,
         )
+        segments = search_result.get("final_results", [])
+        
+        # Apply diversity filter if requested
+        if diverse and segments:
+            diverse_segments = []
+            episode_counts = {}
+            podcast_counts = {}
+            for seg in segments:
+                ep_id = seg.get("episode_id", "")
+                pod = seg.get("podcast_title", "")
+                if episode_counts.get(ep_id, 0) >= 3 or podcast_counts.get(pod, 0) >= 4:
+                    continue
+                diverse_segments.append(seg)
+                episode_counts[ep_id] = episode_counts.get(ep_id, 0) + 1
+                podcast_counts[pod] = podcast_counts.get(pod, 0) + 1
+            segments = diverse_segments
+            
     except Exception as e:
         logger.error(f"Search failed for topic '{topic}': {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=f"Search error: {type(e).__name__}: {str(e)[:200]}")

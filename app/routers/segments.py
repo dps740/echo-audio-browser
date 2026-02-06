@@ -349,3 +349,25 @@ def _interpret_comparison(comparison) -> dict:
             "Results are comparable - use cheaper model"
         ),
     }
+
+
+# === SMART SEARCH ENDPOINT ===
+from app.services.smart_search import smart_search as do_smart_search
+
+@router.get("/smart-search")
+async def smart_search_endpoint(
+    q: str,
+    limit: int = 10,
+    debug: bool = False,
+):
+    """
+    Smart search with LLM-powered query expansion and relevance filtering.
+    
+    Higher quality results but slower (~2-5s) than regular search.
+    
+    - **q**: Search query (e.g., "AGI", "Tesla", "cryptocurrency")
+    - **limit**: Max results (default 10)
+    - **debug**: Include debug info in response
+    """
+    result = do_smart_search(query=q, limit=limit, debug=debug)
+    return result

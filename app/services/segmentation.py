@@ -25,53 +25,284 @@ class SegmentResult:
     start_ms: int
     end_ms: int
     summary: str
-    topic_tags: List[str]
+    topic_tags: List[str]  # kept for backward compat, now = [primary] + secondary
     density_score: float
     transcript_text: str
+    primary_topic: str = ""
+    secondary_topics: List[str] = field(default_factory=list)
+    content_type: str = "content"  # content | ad | intro | outro
 
 
-SEGMENTATION_PROMPT = """You are analyzing a podcast transcript to identify "Atomic Ideas" - standalone segments where a specific topic is discussed comprehensively.
+SEGMENTATION_PROMPT = """You are analyzing a podcast transcript to identify SHORT, FOCUSED segments (atomic ideas).
 
-Your task:
-1. Identify 5-15 segments of 2-10 minutes each
-2. Each segment should be a complete discussion of one topic
-3. Rate each segment's "density score" (0.0-1.0) - how much valuable information vs filler/tangents
-4. Assign 2-4 SPECIFIC topic tags per segment
+CRITICAL: SKIP NON-CONTENT
+First, identify and EXCLUDE:
+- Sponsor reads / advertisements ("this episode brought to you by", "use code", "thanks to our sponsors")
+- Show intros with theme music descriptions
+- Outros, credits, calls to subscribe/review
+- Extended banter with no substance
 
-Rules:
-- Segments should not overlap
-- Prefer natural break points (topic changes, pauses)
-- Higher density = more actionable information, insights, or arguments
-- Lower density = small talk, lengthy anecdotes, repeated content
+Only segment ACTUAL CONTENT discussions.
 
-CRITICAL REQUIREMENTS FOR SUMMARIES:
-- Write 3-4 sentences capturing the SPECIFIC argument, claim, or insight discussed
-- Include names of people, companies, or concepts mentioned
-- Include specific numbers, dates, predictions, or claims made
-- Generic summaries like "discussion of AI" or "talks about technology" are NOT acceptable
-- Each summary must be detailed enough that someone could understand the key insight without listening
+SEGMENT LENGTH: TARGET 1-3 MINUTES
+- Prefer shorter, focused segments over long rambling ones
+- A 10-minute discussion should become 3-5 segments, not 1
+- Break at natural topic shifts, even within a conversation
+- Each segment = ONE focused idea or topic
 
-CRITICAL REQUIREMENTS FOR TAGS:
-- Tags MUST be specific topics, not broad categories
-- BAD tags: "AI", "technology", "business", "philosophy", "science"
-- GOOD tags: "AGI timeline predictions", "transformer scaling laws", "YC application advice", "Stoic death meditation", "Bitcoin ETF impact"
-- Each tag should be 2-5 words describing a specific subtopic
+TOPIC TAGGING: PRIMARY + SECONDARY
+For each segment, identify:
+- primary_topic: The MAIN thing being discussed (2-5 words, specific)
+- secondary_topics: OTHER things mentioned/discussed (entities, examples, tangents)
+
+Example: A segment primarily about "AI replacing jobs" might mention hotels, airlines, customer service
+- primary_topic: "AI job displacement fears"
+- secondary_topics: ["hotel industry automation", "airline customer service", "call center jobs"]
+
+This allows searching for "hotel" to find segments where hotels were discussed, even if not the main topic.
+
+CONTENT TYPE LABELING
+Mark each segment:
+- "content" = actual discussion (will be indexed)
+- "ad" = sponsor read, advertisement (will be skipped)
+- "intro" = show intro, theme music, housekeeping (will be skipped)  
+- "outro" = closing remarks, subscribe prompts (will be skipped)
+
+QUOTE ANCHORS (CRITICAL - READ CAREFULLY)
+You must define WHERE each segment starts and ends using exact quotes from the transcript.
+
+starts_with = The FIRST words spoken when this topic BEGINS
+ends_with = The LAST words spoken BEFORE they move to a DIFFERENT topic
+
+IMPORTANT: These quotes define the BOUNDARIES of the ENTIRE discussion, not just one sentence!
+
+WRONG approach (too narrow):
+- Topic is "Why Acquired podcast succeeded" (discussed for 2 minutes)
+- starts_with: "we've received a bunch of" (one sentence from the middle)
+- ends_with: "99% of podcasts do not" (same sentence)
+- Result: 10-second clip that misses most of the discussion!
+
+CORRECT approach (full boundaries):
+- Topic is "Why Acquired podcast succeeded" (discussed for 2 minutes)  
+- starts_with: "So let me tell you why" (where they FIRST start discussing this)
+- ends_with: "and that's the real secret" (the LAST thing said before changing topics)
+- Result: Full 2-minute clip capturing the entire discussion!
+
+Think of it like this:
+- starts_with = "Press play here"
+- ends_with = "Stop playback here"
+- The listener should hear the COMPLETE discussion of this topic
+
+Copy 4-6 words EXACTLY as they appear in the transcript (punctuation, capitalization may vary).
 
 Return JSON array:
 [
   {{
-    "start_ms": 0,
-    "end_ms": 180000,
-    "summary": "Detailed 3-4 sentence summary capturing the SPECIFIC argument, claim, or insight discussed. Include names, numbers, and concrete details.",
-    "topic_tags": ["specific subtopic 1", "specific subtopic 2"],
-    "density_score": 0.8
+    "content_type": "content",
+    "primary_topic": "Specific main topic in 2-5 words",
+    "secondary_topics": ["other thing mentioned", "another entity discussed", "example given"],
+    "summary": "2-3 sentences capturing the SPECIFIC insight. Include names, numbers, concrete details.",
+    "density_score": 0.8,
+    "starts_with": "So let me explain why",
+    "ends_with": "and that changed everything for us"
+  }},
+  {{
+    "content_type": "content",
+    "primary_topic": "Warren Buffett investment philosophy",
+    "secondary_topics": ["Berkshire Hathaway", "value investing", "long-term thinking"],
+    "summary": "Discussion of Buffett's approach to identifying undervalued companies and holding them indefinitely.",
+    "density_score": 0.9,
+    "starts_with": "When you look at Buffett",
+    "ends_with": "that's his entire strategy in a nutshell"
+  }},
+  {{
+    "content_type": "ad",
+    "primary_topic": "Sponsor: Athletic Greens",
+    "secondary_topics": [],
+    "summary": "Advertisement for Athletic Greens supplement.",
+    "density_score": 0.0,
+    "starts_with": "This episode is brought to",
+    "ends_with": "now back to the show"
   }}
 ]
+
+REMEMBER: starts_with and ends_with must capture the FULL topic discussion, typically 1-3 minutes of audio. If your segment would be less than 30 seconds, you probably picked quotes that are too close together!
+
+BAD TAGS: "AI", "technology", "business", "interview", "discussion"
+GOOD TAGS: "GPT-4 capabilities demo", "hotel cleanliness standards", "Y Combinator interview tips"
 
 TRANSCRIPT:
 {transcript}
 
 Return ONLY valid JSON, no other text."""
+
+
+def resolve_timestamps(
+    transcript_words: List[TranscriptWord],
+    starts_with: str,
+    ends_with: str
+) -> Tuple[Optional[int], Optional[int], str]:
+    """
+    Find timestamps by locating quote anchors in the word-level transcript.
+    
+    Args:
+        transcript_words: List of TranscriptWord with word, start_ms, end_ms
+        starts_with: Quote anchor for segment start
+        ends_with: Quote anchor for segment end
+        
+    Returns:
+        (start_ms, end_ms, status) where status is 'exact', 'fuzzy', or 'failed'
+    """
+    if not transcript_words or not starts_with or not ends_with:
+        return None, None, "failed"
+    
+    # Build full transcript text with word positions
+    words_list = [w.word for w in transcript_words]
+    full_text = " ".join(words_list).lower()
+    
+    # Normalize the quotes
+    starts_with_lower = starts_with.lower().strip()
+    ends_with_lower = ends_with.lower().strip()
+    
+    # Try exact match first
+    start_ms, start_status = _find_quote_position(transcript_words, starts_with_lower, find_end=False)
+    end_ms, end_status = _find_quote_position(transcript_words, ends_with_lower, find_end=True)
+    
+    if start_ms is not None and end_ms is not None:
+        # Validate - end must be after start
+        if end_ms > start_ms:
+            status = "exact" if start_status == "exact" and end_status == "exact" else "fuzzy"
+            return start_ms, end_ms, status
+    
+    # If we got start but not end, or vice versa, try fuzzy
+    if start_ms is None:
+        start_ms, start_status = _fuzzy_find_quote(transcript_words, starts_with_lower, find_end=False)
+    if end_ms is None:
+        end_ms, end_status = _fuzzy_find_quote(transcript_words, ends_with_lower, find_end=True)
+    
+    if start_ms is not None and end_ms is not None and end_ms > start_ms:
+        return start_ms, end_ms, "fuzzy"
+    
+    return None, None, "failed"
+
+
+def _find_quote_position(
+    words: List[TranscriptWord],
+    quote: str,
+    find_end: bool = False
+) -> Tuple[Optional[int], str]:
+    """
+    Find position of a quote in the transcript.
+    
+    Args:
+        words: Transcript words
+        quote: Quote to find (lowercase)
+        find_end: If True, return end_ms of last word; otherwise start_ms of first word
+        
+    Returns:
+        (timestamp_ms, status) where status is 'exact' or 'failed'
+    """
+    quote_words = quote.split()
+    if not quote_words:
+        return None, "failed"
+    
+    # Slide through transcript looking for match
+    for i in range(len(words) - len(quote_words) + 1):
+        match = True
+        for j, qw in enumerate(quote_words):
+            # Strip punctuation for comparison
+            word_clean = words[i + j].word.lower().strip(".,!?\"'()-:;")
+            qw_clean = qw.strip(".,!?\"'()-:;")
+            if word_clean != qw_clean:
+                match = False
+                break
+        
+        if match:
+            if find_end:
+                return words[i + len(quote_words) - 1].end_ms, "exact"
+            else:
+                return words[i].start_ms, "exact"
+    
+    return None, "failed"
+
+
+def _fuzzy_find_quote(
+    words: List[TranscriptWord],
+    quote: str,
+    find_end: bool = False,
+    min_overlap: float = 0.6
+) -> Tuple[Optional[int], str]:
+    """
+    Fuzzy match a quote allowing for partial matches.
+    
+    Args:
+        words: Transcript words
+        quote: Quote to find (lowercase)
+        find_end: If True, return end_ms of last word; otherwise start_ms of first word
+        min_overlap: Minimum fraction of quote words that must match
+        
+    Returns:
+        (timestamp_ms, status) where status is 'fuzzy' or 'failed'
+    """
+    quote_words = quote.split()
+    if not quote_words:
+        return None, "failed"
+    
+    required_matches = max(2, int(len(quote_words) * min_overlap))
+    best_match_count = 0
+    best_position = None
+    
+    # Try different window sizes
+    for window_size in range(len(quote_words), len(quote_words) + 3):
+        for i in range(len(words) - window_size + 1):
+            window_words = [w.word.lower().strip(".,!?\"'()-:;") for w in words[i:i + window_size]]
+            
+            # Count matching words (in order, allowing gaps)
+            matches = 0
+            window_idx = 0
+            for qw in quote_words:
+                qw_clean = qw.strip(".,!?\"'()-:;")
+                while window_idx < len(window_words):
+                    if window_words[window_idx] == qw_clean:
+                        matches += 1
+                        window_idx += 1
+                        break
+                    window_idx += 1
+            
+            if matches > best_match_count and matches >= required_matches:
+                best_match_count = matches
+                if find_end:
+                    best_position = words[i + window_size - 1].end_ms
+                else:
+                    best_position = words[i].start_ms
+    
+    if best_position is not None:
+        return best_position, "fuzzy"
+    
+    return None, "failed"
+
+
+def validate_segment_duration(start_ms: int, end_ms: int, min_sec: int = 30, max_sec: int = 300) -> Tuple[bool, str]:
+    """
+    Validate segment duration is within acceptable range.
+    
+    Args:
+        start_ms, end_ms: Segment boundaries
+        min_sec: Minimum duration in seconds (default 30)
+        max_sec: Maximum duration in seconds (default 300 = 5 min)
+        
+    Returns:
+        (is_valid, message)
+    """
+    duration_ms = end_ms - start_ms
+    duration_sec = duration_ms / 1000
+    
+    if duration_sec < min_sec:
+        return False, f"Too short: {duration_sec:.1f}s < {min_sec}s minimum"
+    if duration_sec > max_sec:
+        return False, f"Too long: {duration_sec:.1f}s > {max_sec}s maximum"
+    
+    return True, f"OK: {duration_sec:.1f}s"
 
 
 async def segment_transcript(
@@ -88,6 +319,59 @@ async def segment_transcript(
     Returns:
         List of identified segments
     """
+    # For long transcripts, chunk into ~15 minute pieces
+    CHUNK_DURATION_MS = 15 * 60 * 1000  # 15 minutes
+    MAX_CHUNK_CHARS = 40000  # Safety limit
+    
+    total_duration = transcript.words[-1].end_ms if transcript.words else 0
+    
+    if total_duration <= CHUNK_DURATION_MS * 1.5:
+        # Short enough to process in one go
+        return await _segment_single_chunk(transcript, episode_title)
+    
+    # Chunk the transcript
+    all_segments = []
+    chunk_start_ms = 0
+    
+    while chunk_start_ms < total_duration:
+        chunk_end_ms = min(chunk_start_ms + CHUNK_DURATION_MS, total_duration)
+        
+        # Get words for this chunk
+        chunk_words = [w for w in transcript.words 
+                      if w.start_ms >= chunk_start_ms and w.start_ms < chunk_end_ms]
+        
+        if not chunk_words:
+            chunk_start_ms = chunk_end_ms
+            continue
+        
+        # Create chunk transcript
+        chunk_transcript = TranscriptResult(
+            text=' '.join(w.word for w in chunk_words),
+            words=chunk_words,
+            duration_ms=chunk_end_ms - chunk_start_ms,
+            speakers=[]
+        )
+        
+        print(f"[DEBUG] Processing chunk {chunk_start_ms//60000}m - {chunk_end_ms//60000}m ({len(chunk_words)} words)")
+        
+        # Segment this chunk
+        try:
+            chunk_segments = await _segment_single_chunk(chunk_transcript, episode_title)
+            all_segments.extend(chunk_segments)
+            print(f"[DEBUG] Chunk yielded {len(chunk_segments)} segments")
+        except Exception as e:
+            print(f"[DEBUG] Chunk failed: {e}")
+        
+        chunk_start_ms = chunk_end_ms
+    
+    return all_segments
+
+
+async def _segment_single_chunk(
+    transcript: TranscriptResult,
+    episode_title: str = "",
+) -> List[SegmentResult]:
+    """Segment a single chunk of transcript."""
     # Prepare transcript text with approximate timestamps every ~1 minute
     transcript_with_times = _prepare_transcript_with_times(transcript)
     
@@ -220,6 +504,7 @@ async def _segment_with_claude(transcript_text: str) -> List[Dict]:
 def _parse_segments(segments_json: List[Dict], transcript: TranscriptResult) -> List[SegmentResult]:
     """Convert JSON segments to SegmentResult objects with transcript text."""
     results = []
+    anomalies = []
     print(f"[DEBUG] Parsing {len(segments_json)} segments")
     print(f"[DEBUG] segments_json type: {type(segments_json)}")
     if segments_json:
@@ -232,8 +517,60 @@ def _parse_segments(segments_json: List[Dict], transcript: TranscriptResult) -> 
             if isinstance(seg, str):
                 print(f"[DEBUG] ERROR: segment is a string, not dict: {seg[:100]}")
                 raise ValueError(f"Segment {i} is a string, not dict")
-            start_ms = seg.get("start_ms", 0)
-            end_ms = seg.get("end_ms", 0)
+            
+            # Handle new format (primary_topic + secondary_topics) and old format (topic_tags)
+            primary_topic = seg.get("primary_topic", "")
+            secondary_topics = seg.get("secondary_topics", [])
+            content_type = seg.get("content_type", "content")
+            
+            # Skip non-content segments (ads, intros, outros)
+            if content_type != "content":
+                print(f"[DEBUG] Skipping {content_type} segment: {primary_topic}")
+                continue
+            
+            # Get quote anchors (new format) or fall back to timestamps (old format)
+            starts_with = seg.get("starts_with", "")
+            ends_with = seg.get("ends_with", "")
+            
+            if starts_with and ends_with:
+                # Use quote-anchored timestamp resolution
+                start_ms, end_ms, status = resolve_timestamps(
+                    transcript.words, starts_with, ends_with
+                )
+                
+                if start_ms is None or end_ms is None:
+                    print(f"[DEBUG] Failed to resolve timestamps for segment {i}")
+                    print(f"[DEBUG]   starts_with: '{starts_with}'")
+                    print(f"[DEBUG]   ends_with: '{ends_with}'")
+                    anomalies.append({
+                        "segment_idx": i,
+                        "primary_topic": primary_topic,
+                        "starts_with": starts_with,
+                        "ends_with": ends_with,
+                        "error": "timestamp_resolution_failed"
+                    })
+                    continue
+                
+                print(f"[DEBUG] Segment {i}: resolved timestamps ({status}): {start_ms}ms - {end_ms}ms")
+                
+                # Validate duration
+                is_valid, msg = validate_segment_duration(start_ms, end_ms)
+                if not is_valid:
+                    print(f"[DEBUG] Segment {i} duration anomaly: {msg}")
+                    anomalies.append({
+                        "segment_idx": i,
+                        "primary_topic": primary_topic,
+                        "start_ms": start_ms,
+                        "end_ms": end_ms,
+                        "duration_sec": (end_ms - start_ms) / 1000,
+                        "error": msg
+                    })
+                    # Still include it but flag it
+            else:
+                # Fall back to direct timestamps (old format / backward compat)
+                start_ms = seg.get("start_ms", 0)
+                end_ms = seg.get("end_ms", 0)
+                print(f"[DEBUG] Segment {i}: using direct timestamps (legacy): {start_ms}ms - {end_ms}ms")
             
             # Extract transcript text for this segment
             segment_words = [
@@ -242,18 +579,32 @@ def _parse_segments(segments_json: List[Dict], transcript: TranscriptResult) -> 
             ]
             transcript_text = " ".join(segment_words)
             
+            # Build topic_tags for backward compat: [primary] + secondary
+            if primary_topic:
+                topic_tags = [primary_topic] + secondary_topics
+            else:
+                topic_tags = seg.get("topic_tags", [])
+            
             results.append(SegmentResult(
                 start_ms=start_ms,
                 end_ms=end_ms,
                 summary=seg.get("summary", ""),
-                topic_tags=seg.get("topic_tags", []),
+                topic_tags=topic_tags,
                 density_score=float(seg.get("density_score", 0.5)),
                 transcript_text=transcript_text,
+                primary_topic=primary_topic,
+                secondary_topics=secondary_topics,
+                content_type=content_type,
             ))
         except Exception as e:
             print(f"[DEBUG] Error parsing segment {i}: {e}")
             print(f"[DEBUG] Segment data: {seg}")
             raise
+    
+    if anomalies:
+        print(f"[DEBUG] {len(anomalies)} anomalies detected during parsing:")
+        for a in anomalies:
+            print(f"[DEBUG]   - {a}")
     
     print(f"[DEBUG] Successfully parsed {len(results)} segments")
     return results

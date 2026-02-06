@@ -1,10 +1,16 @@
 # Echo - Topic-First Audio Browser
 
 ## Project Overview
-**Status:** MVP — Testing full pipeline (Deep Re-analyze)
+**Status:** V2 Segmentation — Testing improved search quality
 **Repo:** https://github.com/dps740/echo-audio-browser
 **Started:** 2026-01-26
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-06
+
+## Key Documentation
+- `SEGMENTATION_V2.md` — V2 segmentation approach (1-2 min segments, primary+secondary topics)
+- `FUTURE_FEATURES.md` — Actionable intelligence layer (not yet built)
+- `META_INTELLIGENCE_LAYER.md` — Advanced meta-analysis concepts (not yet built)
+- `TOOLS_OF_TITANS_FEATURE.md` — Auto-generate "Tools of Titans" from podcasts (not yet built)
 
 ## Core Concept
 Browse podcasts by **topic** rather than episode. Search "AI safety" and get a playlist of relevant segments from multiple podcasts. Audio stored locally — zero hosting costs.
@@ -187,3 +193,8 @@ After David validates the deep re-analyze results:
   3. Create `.env` with `OPENAI_API_KEY=sk-...`
   4. `start_server.bat` or `python -m uvicorn app.main:app --port 8765`
   5. Browser: http://localhost:8765/player
+
+## Google Drive Audio Folder
+- **URL:** https://drive.google.com/drive/folders/1-ctNQPU0s2zqzdq74h-FNQFJItgrLMbT
+- **Purpose:** Source audio files for Echo ingestion
+

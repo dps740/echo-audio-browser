@@ -67,6 +67,10 @@ async def store_segments(
         # Document is the summary + transcript for embedding
         doc = f"{seg.summary}\n\n{seg.transcript_text[:2000]}"
         
+        # Build searchable text from all topics
+        all_topics = ",".join(seg.topic_tags)
+        secondary = ",".join(seg.secondary_topics) if hasattr(seg, 'secondary_topics') else ""
+        
         metadata = {
             "episode_id": episode_id,
             "episode_title": episode_title,
@@ -75,7 +79,9 @@ async def store_segments(
             "start_ms": seg.start_ms,
             "end_ms": seg.end_ms,
             "summary": seg.summary,
-            "topic_tags": ",".join(seg.topic_tags),
+            "topic_tags": all_topics,
+            "primary_topic": seg.primary_topic if hasattr(seg, 'primary_topic') else "",
+            "secondary_topics": secondary,
             "density_score": seg.density_score,
         }
         

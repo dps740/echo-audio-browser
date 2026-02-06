@@ -1,0 +1,16 @@
+[Unit]
+Description=Echo Audio Browser API
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/clawd/projects/echo-audio-browser
+ExecStart=/home/ubuntu/clawd/projects/echo-audio-browser/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765
+Restart=always
+RestartSec=5
+StandardOutput=append:/tmp/echo-server.log
+StandardError=append:/tmp/echo-server.log
+
+[Install]
+WantedBy=multi-user.target

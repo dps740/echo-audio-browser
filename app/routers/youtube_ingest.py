@@ -1207,44 +1207,62 @@ def _save_transcript(video_id: str, title: str, podcast: str, segments: list, ou
 
 def _transcribe_with_whisper(audio_path: str, output_dir: str, model: str = "base") -> list:
     """
-    Transcribe audio file using OpenAI Whisper CLI.
+    Transcribe audio file using faster-whisper with CUDA + int8.
+    Falls back to CPU if CUDA unavailable.
     Returns list of segments with timestamps.
     """
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        raise Exception("faster-whisper not installed. Run: pip install faster-whisper")
+    
     os.makedirs(output_dir, exist_ok=True)
     
-    # Run whisper CLI
-    cmd = [
-        "whisper",
+    # Try CUDA with int8 quantization (good for older GPUs like GTX 1050 Ti)
+    # Falls back to CPU if CUDA not available
+    try:
+        print(f"[Whisper] Loading {model} model with CUDA int8...")
+        whisper_model = WhisperModel(model, device="cuda", compute_type="int8")
+        device_used = "cuda (int8)"
+    except Exception as e:
+        print(f"[Whisper] CUDA failed ({e}), falling back to CPU...")
+        whisper_model = WhisperModel(model, device="cpu", compute_type="int8")
+        device_used = "cpu (int8)"
+    
+    print(f"[Whisper] Transcribing with {device_used}: {audio_path}")
+    
+    # Transcribe
+    segments_iter, info = whisper_model.transcribe(
         audio_path,
-        "--model", model,
-        "--output_dir", output_dir,
-        "--output_format", "json",
-        "--language", "en"
-    ]
+        language="en",
+        beam_size=5,
+        vad_filter=True,  # Filter out silence
+    )
     
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)  # 2hr timeout for long podcasts
+    print(f"[Whisper] Detected language: {info.language} (prob: {info.language_probability:.2f})")
     
-    if result.returncode != 0:
-        raise Exception(f"Whisper failed: {result.stderr[:200]}")
-    
-    # Find and parse the JSON output
-    audio_basename = os.path.splitext(os.path.basename(audio_path))[0]
-    json_path = os.path.join(output_dir, f"{audio_basename}.json")
-    
-    if not os.path.exists(json_path):
-        raise Exception(f"Whisper output not found: {json_path}")
-    
-    with open(json_path, 'r', encoding='utf-8') as f:
-        whisper_output = json.load(f)
-    
-    # Convert Whisper format to our segment format
+    # Convert to our segment format
     segments = []
-    for seg in whisper_output.get("segments", []):
+    for seg in segments_iter:
         segments.append({
-            "start_ms": int(seg["start"] * 1000),
-            "end_ms": int(seg["end"] * 1000),
-            "text": seg["text"].strip()
+            "start_ms": int(seg.start * 1000),
+            "end_ms": int(seg.end * 1000),
+            "text": seg.text.strip()
         })
+    
+    print(f"[Whisper] Transcribed {len(segments)} segments using {device_used}")
+    
+    # Also save JSON for reference
+    audio_basename = os.path.splitext(os.path.basename(audio_path))[0]
+    json_path = os.path.join(output_dir, f"{audio_basename}_whisper.json")
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump({
+            "audio": audio_path,
+            "model": model,
+            "device": device_used,
+            "language": info.language,
+            "segments": segments,
+        }, f, indent=2)
     
     return segments
 

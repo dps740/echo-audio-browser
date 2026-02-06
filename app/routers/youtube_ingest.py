@@ -1163,6 +1163,7 @@ class DownloadTranscribeRequest(BaseModel):
     channel: str
     podcast_name: Optional[str] = None
     limit: int = 10
+    whisper_model: str = "base"  # tiny, base, small, medium, large
 
 
 def _save_transcript(video_id: str, title: str, podcast: str, segments: list, output_dir: str):
@@ -1204,13 +1205,59 @@ def _save_transcript(video_id: str, title: str, podcast: str, segments: list, ou
     return txt_path, json_path
 
 
-def _download_transcribe_channel(job_id: str, channel: str, podcast_name: Optional[str], limit: int):
-    """Background: download and transcribe videos from a channel (no indexing)."""
+def _transcribe_with_whisper(audio_path: str, output_dir: str, model: str = "base") -> list:
+    """
+    Transcribe audio file using OpenAI Whisper CLI.
+    Returns list of segments with timestamps.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Run whisper CLI
+    cmd = [
+        "whisper",
+        audio_path,
+        "--model", model,
+        "--output_dir", output_dir,
+        "--output_format", "json",
+        "--language", "en"
+    ]
+    
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)  # 2hr timeout for long podcasts
+    
+    if result.returncode != 0:
+        raise Exception(f"Whisper failed: {result.stderr[:200]}")
+    
+    # Find and parse the JSON output
+    audio_basename = os.path.splitext(os.path.basename(audio_path))[0]
+    json_path = os.path.join(output_dir, f"{audio_basename}.json")
+    
+    if not os.path.exists(json_path):
+        raise Exception(f"Whisper output not found: {json_path}")
+    
+    with open(json_path, 'r', encoding='utf-8') as f:
+        whisper_output = json.load(f)
+    
+    # Convert Whisper format to our segment format
+    segments = []
+    for seg in whisper_output.get("segments", []):
+        segments.append({
+            "start_ms": int(seg["start"] * 1000),
+            "end_ms": int(seg["end"] * 1000),
+            "text": seg["text"].strip()
+        })
+    
+    return segments
+
+
+def _download_transcribe_channel(job_id: str, channel: str, podcast_name: Optional[str], limit: int, whisper_model: str = "base"):
+    """Background: download and transcribe videos from a channel using Whisper (no indexing)."""
     try:
         output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "transcripts")
+        audio_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "audio")
         
         _jobs[job_id]["status"] = "listing_videos"
         _jobs[job_id]["output_dir"] = output_dir
+        _jobs[job_id]["whisper_model"] = whisper_model
         
         # Get video list
         cmd = [
@@ -1256,7 +1303,7 @@ def _download_transcribe_channel(job_id: str, channel: str, podcast_name: Option
             vid_status = {
                 "id": video["id"],
                 "title": video["title"],
-                "status": "processing",
+                "status": "downloading",
                 "index": i + 1,
             }
             _jobs[job_id]["videos"].append(vid_status)
@@ -1266,31 +1313,45 @@ def _download_transcribe_channel(job_id: str, channel: str, podcast_name: Option
                 url = video["url"]
                 video_id = video["id"]
                 
-                # Get captions
-                segments = _get_captions(url)
-                if not segments:
-                    vid_status["status"] = "no_captions"
+                # Download audio first
+                vid_status["status"] = "downloading"
+                audio_path = _download_audio(url, video_id)
+                
+                # Get full path to audio file
+                full_audio_path = os.path.join(audio_dir, f"{video_id}.mp3")
+                if not os.path.exists(full_audio_path):
+                    vid_status["status"] = "failed"
+                    vid_status["error"] = "Audio download failed"
                     failed += 1
                     continue
                 
-                # Download audio
-                audio_path = _download_audio(url, video_id)
+                # Transcribe with Whisper
+                vid_status["status"] = "transcribing"
+                _jobs[job_id]["status"] = "transcribing"
+                
+                segments = _transcribe_with_whisper(full_audio_path, output_dir, whisper_model)
+                
+                if not segments:
+                    vid_status["status"] = "failed"
+                    vid_status["error"] = "Whisper returned no segments"
+                    failed += 1
+                    continue
                 
                 # Save transcript files
                 txt_path, json_path = _save_transcript(video_id, video["title"], name, segments, output_dir)
                 
                 vid_status["status"] = "complete"
                 vid_status["transcript"] = txt_path
+                vid_status["segments"] = len(segments)
                 transcripts.append({
                     "video_id": video_id,
                     "title": video["title"],
                     "txt": txt_path,
                     "json": json_path,
                     "audio": audio_path,
+                    "segments": len(segments),
                 })
                 success += 1
-                
-                time.sleep(1)  # Rate limit
                 
             except Exception as e:
                 vid_status["status"] = "failed"
@@ -1311,8 +1372,9 @@ def _download_transcribe_channel(job_id: str, channel: str, podcast_name: Option
 @router.post("/download-transcribe")
 async def download_transcribe_channel(request: DownloadTranscribeRequest, background_tasks: BackgroundTasks):
     """
-    Download and transcribe videos from a channel WITHOUT indexing to ChromaDB.
+    Download and transcribe videos from a channel using Whisper.
     Outputs raw transcript files (txt + json) to app/transcripts/ folder.
+    Does NOT index to ChromaDB — raw files only.
     """
     global _job_counter
     _job_counter += 1
@@ -1323,15 +1385,16 @@ async def download_transcribe_channel(request: DownloadTranscribeRequest, backgr
         "type": "download_transcribe",
         "channel": request.channel,
         "limit": request.limit,
+        "whisper_model": request.whisper_model,
         "status": "queued",
         "created_at": datetime.utcnow().isoformat(),
     }
     
     background_tasks.add_task(
-        _download_transcribe_channel, job_id, request.channel, request.podcast_name, request.limit
+        _download_transcribe_channel, job_id, request.channel, request.podcast_name, request.limit, request.whisper_model
     )
     
-    return {"job_id": job_id, "status": "queued"}
+    return {"job_id": job_id, "status": "queued", "whisper_model": request.whisper_model}
 
 
 @router.get("/transcripts")

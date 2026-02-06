@@ -425,11 +425,20 @@
                     <input type="text" id="ingest-channel" placeholder="@channel_handle">
                     <input type="number" id="ingest-limit" value="10" min="1" max="100" style="max-width: 100px;">
                     <button class="btn btn-primary" onclick="ingestChannel()">Ingest Channel</button>
-                    <button class="btn" onclick="downloadTranscribeChannel()" style="background: var(--bg-tertiary);" title="Download audio + transcripts only (no indexing)">📥 Download Only</button>
+                </div>
+                <div class="input-row" style="margin-top: 8px;">
+                    <select id="whisper-model" style="max-width: 140px;">
+                        <option value="tiny">tiny (fast)</option>
+                        <option value="base" selected>base (balanced)</option>
+                        <option value="small">small (better)</option>
+                        <option value="medium">medium (good)</option>
+                        <option value="large">large (best)</option>
+                    </select>
+                    <button class="btn" onclick="downloadTranscribeChannel()" style="background: var(--bg-tertiary);" title="Download + Whisper transcription (no indexing)">🎙️ Download + Whisper</button>
                 </div>
             </div>
             <p style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">
-                💡 <strong>Download Only</strong> saves audio + transcripts to <code>app/transcripts/</code> without indexing. Upload to Google Drive for processing.
+                💡 <strong>Download + Whisper</strong> uses local Whisper transcription instead of YouTube captions. Output goes to <code>app/transcripts/</code>.
             </p>
         </div>
 
@@ -893,12 +902,13 @@
         }
         const limit = parseInt(document.getElementById('ingest-limit').value) || 10;
         const name = document.getElementById('ingest-podcast-name').value.trim() || undefined;
+        const whisper_model = document.getElementById('whisper-model').value;
 
         try {
             await api('/ingest/youtube/download-transcribe', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel, podcast_name: name, limit }),
+                body: JSON.stringify({ channel, podcast_name: name, limit, whisper_model }),
             });
             document.getElementById('ingest-channel').value = '';
             refreshJobs();
@@ -941,6 +951,7 @@
             extracting_captions: ['📝', 'Extracting captions...', 'badge-info'],
             downloading_audio: ['⬇️', 'Downloading audio...', 'badge-info'],
             downloading: ['📥', 'Downloading...', 'badge-info'],
+            transcribing: ['🎙️', 'Transcribing (Whisper)...', 'badge-info'],
             indexing: ['📊', 'Indexing...', 'badge-info'],
             listing_videos: ['📋', 'Listing videos...', 'badge-info'],
             ingesting: ['🔄', 'Ingesting...', 'badge-info'],
@@ -1013,21 +1024,32 @@
         }
 
         // Download & Transcribe progress
-        if (j.type === 'download_transcribe' && j.total_videos) {
-            const done = j.current_video || 0;
-            const pct = Math.round((done / j.total_videos) * 100);
-            details += `
-                <div class="job-progress">
-                    <span style="font-size:13px;color:var(--text-secondary)">📥 ${done} / ${j.total_videos} videos downloaded</span>
-                    <div class="job-progress-bar"><div class="job-progress-fill" style="width:${pct}%"></div></div>
-                </div>
-            `;
+        if (j.type === 'download_transcribe') {
+            if (j.whisper_model) {
+                details += `<div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">🎙️ Whisper model: <strong>${esc(j.whisper_model)}</strong></div>`;
+            }
+            if (j.total_videos) {
+                const done = j.current_video || 0;
+                const pct = Math.round((done / j.total_videos) * 100);
+                details += `
+                    <div class="job-progress">
+                        <span style="font-size:13px;color:var(--text-secondary)">${done} / ${j.total_videos} videos</span>
+                        <div class="job-progress-bar"><div class="job-progress-fill" style="width:${pct}%"></div></div>
+                    </div>
+                `;
+            }
             if (j.videos && j.videos.length) {
                 const recent = j.videos.slice(-5).reverse();
+                const statusLabels = {
+                    'downloading': '📥 downloading',
+                    'transcribing': '🎙️ transcribing',
+                    'complete': '✅ done',
+                    'failed': '❌ failed',
+                };
                 details += `<div class="job-videos">${recent.map(v => `
                     <div class="job-video">
                         <span>${esc((v.title || '').substring(0, 50))}</span>
-                        <span class="list-item-badge ${v.status === 'complete' ? 'badge-success' : v.status === 'failed' || v.status === 'no_captions' ? 'badge-danger' : 'badge-info'}">${v.status}</span>
+                        <span class="list-item-badge ${v.status === 'complete' ? 'badge-success' : v.status === 'failed' ? 'badge-danger' : 'badge-info'}">${statusLabels[v.status] || v.status}</span>
                     </div>
                 `).join('')}</div>`;
             }

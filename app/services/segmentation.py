@@ -144,6 +144,13 @@ async def _segment_with_openai(transcript_text: str) -> List[Dict]:
         print(f"[DEBUG] Full traceback:\n{traceback.format_exc()}")
         raise
     
+    # Strip markdown code blocks if present
+    if "```json" in content:
+        content = content.split("```json")[1].split("```")[0]
+    elif "```" in content:
+        content = content.split("```")[1].split("```")[0]
+    content = content.strip()
+    
     # Parse JSON
     try:
         data = json.loads(content)

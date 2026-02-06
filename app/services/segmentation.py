@@ -46,13 +46,13 @@ Rules:
 
 Return JSON array:
 [
-  {
+  {{
     "start_ms": 0,
     "end_ms": 180000,
     "summary": "Brief 1-2 sentence summary of the segment",
     "topic_tags": ["AI", "Machine Learning"],
     "density_score": 0.8
-  }
+  }}
 ]
 
 TRANSCRIPT:

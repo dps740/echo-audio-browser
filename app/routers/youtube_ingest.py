@@ -1454,3 +1454,291 @@ async def list_transcripts():
         "path": transcript_dir,
         "count": len(transcripts),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Pipeline V2 - WAV + MFA for accurate timestamps
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# V2 job storage (separate from v1 for clarity)
+_v2_jobs: Dict[str, dict] = {}
+
+
+class IngestV2Request(BaseModel):
+    url: str
+    podcast_name: Optional[str] = None
+    use_whisper: bool = False  # Force Whisper instead of YouTube captions
+    whisper_model: str = "tiny"
+
+
+class IngestChannelV2Request(BaseModel):
+    channel: str
+    podcast_name: Optional[str] = None
+    limit: int = 10
+    use_whisper: bool = False
+    whisper_model: str = "tiny"
+
+
+def _run_v2_pipeline(job_id: str, url: str, podcast_name: Optional[str], use_whisper: bool, whisper_model: str):
+    """Background task: run v2 pipeline for single video."""
+    from app.services.pipeline import PipelineJob, run_pipeline, extract_video_id
+    
+    video_id = extract_video_id(url) or f"unknown_{int(time.time())}"
+    audio_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "audio")
+    
+    job = PipelineJob(
+        job_id=job_id,
+        video_id=video_id,
+        url=url,
+        podcast_name=podcast_name,
+        use_whisper=use_whisper,
+        whisper_model=whisper_model
+    )
+    
+    def on_update(j: PipelineJob):
+        _v2_jobs[job_id] = j.to_dict()
+    
+    _v2_jobs[job_id] = job.to_dict()
+    
+    success = run_pipeline(job, audio_dir, on_update)
+    _v2_jobs[job_id] = job.to_dict()
+
+
+def _run_v2_channel_pipeline(
+    job_id: str, 
+    channel: str, 
+    podcast_name: Optional[str], 
+    limit: int,
+    use_whisper: bool, 
+    whisper_model: str
+):
+    """Background task: run v2 pipeline for channel."""
+    from app.services.pipeline import PipelineJob, run_pipeline, extract_video_id
+    
+    audio_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "audio")
+    
+    # Initialize channel job
+    _v2_jobs[job_id] = {
+        "job_id": job_id,
+        "type": "channel_v2",
+        "channel": channel,
+        "status": "listing_videos",
+        "videos": [],
+        "total_videos": 0,
+        "current_video": 0,
+        "success": 0,
+        "failed": 0,
+        "skipped": 0,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    
+    try:
+        # Get video list
+        cmd = [
+            "yt-dlp", "--flat-playlist", "--dump-json",
+            f"https://www.youtube.com/{channel}/videos",
+            "--playlist-end", str(limit)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        
+        videos = []
+        for line in result.stdout.strip().split('\n'):
+            if line:
+                try:
+                    data = json.loads(line)
+                    vid = {
+                        "id": data.get("id"),
+                        "title": data.get("title", "Unknown"),
+                        "url": f"https://www.youtube.com/watch?v={data['id']}",
+                        "duration": data.get("duration"),
+                    }
+                    # Skip short videos (< 5 min)
+                    if vid.get("duration") and vid["duration"] < 300:
+                        continue
+                    videos.append(vid)
+                except json.JSONDecodeError:
+                    continue
+        
+        if not videos:
+            _v2_jobs[job_id]["status"] = "failed"
+            _v2_jobs[job_id]["error"] = "No videos found"
+            return
+        
+        _v2_jobs[job_id]["total_videos"] = len(videos)
+        _v2_jobs[job_id]["status"] = "processing"
+        
+        name = podcast_name or channel
+        
+        for i, video in enumerate(videos):
+            video_id = video["id"]
+            
+            # Check if already ingested
+            if _is_already_ingested(video_id):
+                _v2_jobs[job_id]["videos"].append({
+                    "id": video_id,
+                    "title": video["title"],
+                    "status": "skipped",
+                    "reason": "already ingested"
+                })
+                _v2_jobs[job_id]["skipped"] += 1
+                _v2_jobs[job_id]["current_video"] = i + 1
+                continue
+            
+            # Create pipeline job for this video
+            video_job = PipelineJob(
+                job_id=f"{job_id}_{video_id}",
+                video_id=video_id,
+                url=video["url"],
+                podcast_name=name,
+                use_whisper=use_whisper,
+                whisper_model=whisper_model
+            )
+            
+            _v2_jobs[job_id]["videos"].append({
+                "id": video_id,
+                "title": video["title"],
+                "status": "processing",
+                "steps": {}
+            })
+            _v2_jobs[job_id]["current_video"] = i + 1
+            
+            def on_video_update(j: PipelineJob):
+                # Update the video entry in channel job
+                for v in _v2_jobs[job_id]["videos"]:
+                    if v["id"] == video_id:
+                        v["status"] = j.status
+                        v["steps"] = {k: s.to_dict() for k, s in j.steps.items()}
+                        v["current_step"] = j.current_step
+                        v["progress_pct"] = j.progress_pct
+                        break
+            
+            success = run_pipeline(video_job, audio_dir, on_video_update)
+            
+            # Update final status
+            for v in _v2_jobs[job_id]["videos"]:
+                if v["id"] == video_id:
+                    v["status"] = "complete" if success else "failed"
+                    if not success and video_job.error:
+                        v["error"] = video_job.error
+                    break
+            
+            if success:
+                _v2_jobs[job_id]["success"] += 1
+            else:
+                _v2_jobs[job_id]["failed"] += 1
+            
+            time.sleep(1)  # Rate limit
+        
+        _v2_jobs[job_id]["status"] = "complete"
+        _v2_jobs[job_id]["completed_at"] = datetime.utcnow().isoformat()
+        
+    except Exception as e:
+        _v2_jobs[job_id]["status"] = "failed"
+        _v2_jobs[job_id]["error"] = str(e)
+
+
+@router.post("/v2/url")
+async def ingest_url_v2(request: IngestV2Request, background_tasks: BackgroundTasks):
+    """
+    Ingest a single YouTube URL using the v2 pipeline (WAV + MFA).
+    
+    Pipeline steps:
+    1. Download MP3
+    2. Get transcript (YouTube captions, Whisper fallback)
+    3. Convert to WAV (16kHz mono)
+    4. MFA forced alignment
+    5. Parse TextGrid → word timestamps
+    6. LLM segmentation
+    7. Store in ChromaDB
+    """
+    global _job_counter
+    _job_counter += 1
+    job_id = f"v2_{_job_counter}_{int(time.time())}"
+    
+    background_tasks.add_task(
+        _run_v2_pipeline, 
+        job_id, 
+        request.url, 
+        request.podcast_name,
+        request.use_whisper,
+        request.whisper_model
+    )
+    
+    return {"job_id": job_id, "status": "queued", "pipeline": "v2"}
+
+
+@router.post("/v2/channel")
+async def ingest_channel_v2(request: IngestChannelV2Request, background_tasks: BackgroundTasks):
+    """
+    Ingest videos from a channel using the v2 pipeline.
+    """
+    global _job_counter
+    _job_counter += 1
+    job_id = f"v2_channel_{_job_counter}_{int(time.time())}"
+    
+    background_tasks.add_task(
+        _run_v2_channel_pipeline,
+        job_id,
+        request.channel,
+        request.podcast_name,
+        request.limit,
+        request.use_whisper,
+        request.whisper_model
+    )
+    
+    return {"job_id": job_id, "status": "queued", "pipeline": "v2", "channel": request.channel}
+
+
+@router.get("/v2/jobs")
+async def list_v2_jobs():
+    """List all v2 pipeline jobs (recent first)."""
+    jobs = list(_v2_jobs.values())
+    # Sort by created_at descending
+    jobs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return {"jobs": jobs[:50]}  # Return last 50
+
+
+@router.get("/v2/jobs/{job_id}")
+async def get_v2_job(job_id: str):
+    """Get status of a specific v2 job."""
+    if job_id not in _v2_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _v2_jobs[job_id]
+
+
+@router.get("/v2/status")
+async def get_v2_status():
+    """Check v2 pipeline dependencies."""
+    from app.services.mfa_align import check_mfa_installed, check_mfa_models
+    
+    mfa_installed = check_mfa_installed()
+    mfa_models = check_mfa_models() if mfa_installed else {"dictionary": False, "acoustic": False}
+    
+    # Check ffmpeg
+    try:
+        result = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+        ffmpeg_installed = result.returncode == 0
+    except:
+        ffmpeg_installed = False
+    
+    # Check faster-whisper
+    try:
+        result = subprocess.run(["faster-whisper", "--help"], capture_output=True, timeout=5)
+        whisper_installed = result.returncode == 0
+    except:
+        whisper_installed = False
+    
+    return {
+        "v2_ready": mfa_installed and mfa_models["dictionary"] and mfa_models["acoustic"] and ffmpeg_installed,
+        "dependencies": {
+            "ffmpeg": ffmpeg_installed,
+            "mfa": mfa_installed,
+            "mfa_dictionary": mfa_models["dictionary"],
+            "mfa_acoustic_model": mfa_models["acoustic"],
+            "faster_whisper": whisper_installed,
+        },
+        "notes": {
+            "mfa_install": "conda install -c conda-forge montreal-forced-aligner",
+            "mfa_models": "mfa model download dictionary english_mfa && mfa model download acoustic english_mfa",
+        }
+    }

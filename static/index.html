@@ -400,16 +400,27 @@
     <div id="page-ingest" class="page">
         <h1 class="page-title">Ingest Content</h1>
 
+        <!-- Pipeline Status Banner -->
+        <div class="card" id="pipeline-status" style="display:none; border-color: var(--warning);">
+            <div style="display:flex; align-items:center; gap:10px;">
+                <span style="font-size:20px;">⚠️</span>
+                <div>
+                    <div style="font-weight:600;">Pipeline V2 Not Ready</div>
+                    <div id="pipeline-status-details" style="font-size:13px; color:var(--text-secondary);"></div>
+                </div>
+            </div>
+        </div>
+
         <!-- Single URL -->
         <div class="card">
             <div class="card-title">Add YouTube Video</div>
             <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px;">
-                Paste a YouTube URL to extract captions, download audio, and index the content.
+                Full pipeline: Download → WAV → MFA Alignment → LLM Segmentation → Index
             </p>
             <div class="input-row">
                 <input type="text" id="ingest-url" placeholder="https://www.youtube.com/watch?v=...">
                 <input type="text" id="ingest-podcast-name" placeholder="Podcast name (optional)" style="max-width: 220px;">
-                <button class="btn btn-primary" onclick="ingestURL()">Ingest</button>
+                <button class="btn btn-primary" onclick="ingestURLv2()">▶ Ingest</button>
             </div>
         </div>
 
@@ -424,9 +435,21 @@
                 <div class="input-row">
                     <input type="text" id="ingest-channel" placeholder="@channel_handle">
                     <input type="number" id="ingest-limit" value="10" min="1" max="100" style="max-width: 100px;">
-                    <button class="btn btn-primary" onclick="ingestChannel()">Ingest Channel</button>
+                    <button class="btn btn-primary" onclick="ingestChannelV2()">▶ Ingest Channel</button>
                 </div>
-                <div class="input-row" style="margin-top: 8px;">
+            </div>
+        </div>
+
+        <!-- Transcript Options -->
+        <div class="card">
+            <div class="card-title">Transcript Options</div>
+            <div style="display:flex; flex-direction:column; gap:12px;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                    <input type="checkbox" id="force-whisper" style="width:18px; height:18px;">
+                    <span>Force Whisper transcription (skip YouTube captions)</span>
+                </label>
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <span style="font-size:14px; color:var(--text-secondary);">Whisper model (if needed):</span>
                     <select id="whisper-model" style="max-width: 140px;">
                         <option value="tiny" selected>tiny (fastest)</option>
                         <option value="base">base</option>
@@ -434,35 +457,10 @@
                         <option value="medium">medium</option>
                         <option value="large">large (best)</option>
                     </select>
-                    <button class="btn" onclick="downloadTranscribeChannel()" style="background: var(--bg-tertiary);" title="Download + Whisper transcription (no indexing)">🎙️ Download + Whisper</button>
                 </div>
-            </div>
-            <p style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">
-                💡 <strong>Download + Whisper</strong> uses faster-whisper with CUDA + int8. Output goes to <code>app/transcripts/</code>.
-            </p>
-        </div>
-
-        <!-- Scan Local -->
-        <div class="card">
-            <div class="card-title">Scan Local Audio</div>
-            <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px;">
-                Re-process existing audio files in app/audio/ without re-downloading. Fetches captions from YouTube and runs the full segmentation pipeline.
-            </p>
-            <div style="display: flex; align-items: center; gap: 12px;">
-                <button class="btn btn-primary" onclick="scanLocalAudio()" id="scan-local-btn">📂 Scan Local Files</button>
-                <span id="scan-local-status" style="font-size: 13px; color: var(--text-muted);"></span>
-            </div>
-        </div>
-
-        <!-- Re-analyze -->
-        <div class="card">
-            <div class="card-title">Re-analyze Library</div>
-            <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px;">
-                Re-run the full pipeline on all existing content: LLM re-segmentation, key term extraction, and OpenAI embeddings. Creates new clip boundaries, summaries, and topic tags.
-            </p>
-            <div style="display: flex; align-items: center; gap: 12px;">
-                <button class="btn btn-primary" onclick="deepReanalyzeLibrary()" id="deep-reanalyze-btn">🧠 Re-analyze All</button>
-                <span id="reanalyze-status" style="font-size: 13px; color: var(--text-muted);"></span>
+                <p style="font-size: 12px; color: var(--text-muted);">
+                    💡 Default: Try YouTube captions first, fall back to Whisper if unavailable.
+                </p>
             </div>
         </div>
 
@@ -475,6 +473,28 @@
                 </div>
             </div>
         </div>
+
+        <!-- Legacy Options (collapsed) -->
+        <details style="margin-top:16px;">
+            <summary style="cursor:pointer; color:var(--text-muted); font-size:14px;">Legacy Options (v1 pipeline)</summary>
+            <div class="card" style="margin-top:12px;">
+                <div class="card-title">Scan Local Audio (v1)</div>
+                <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px;">
+                    Re-process existing audio files using v1 pipeline.
+                </p>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <button class="btn btn-secondary" onclick="scanLocalAudio()" id="scan-local-btn">📂 Scan Local Files</button>
+                    <span id="scan-local-status" style="font-size: 13px; color: var(--text-muted);"></span>
+                </div>
+            </div>
+            <div class="card" style="margin-top:12px;">
+                <div class="card-title">Re-analyze Library (v1)</div>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <button class="btn btn-secondary" onclick="deepReanalyzeLibrary()" id="deep-reanalyze-btn">🧠 Re-analyze All</button>
+                    <span id="reanalyze-status" style="font-size: 13px; color: var(--text-muted);"></span>
+                </div>
+            </div>
+        </details>
     </div>
 
     <!-- ═══════════════════ PLAYER ═══════════════════ -->
@@ -751,6 +771,9 @@
 
     // ═══════════════════ INGEST ═══════════════════
     async function loadIngestPage() {
+        // Check pipeline status
+        checkPipelineStatus();
+        
         // Load curated podcasts
         try {
             const data = await api('/ingest/youtube/podcasts');
@@ -857,6 +880,72 @@
         }
     }
 
+    // ═══════════════════ V2 PIPELINE FUNCTIONS ═══════════════════
+    
+    async function checkPipelineStatus() {
+        try {
+            const data = await api('/ingest/youtube/v2/status');
+            const el = document.getElementById('pipeline-status');
+            const details = document.getElementById('pipeline-status-details');
+            
+            if (!data.v2_ready) {
+                el.style.display = 'block';
+                const missing = [];
+                if (!data.dependencies.ffmpeg) missing.push('ffmpeg');
+                if (!data.dependencies.mfa) missing.push('MFA');
+                if (!data.dependencies.mfa_dictionary) missing.push('MFA dictionary');
+                if (!data.dependencies.mfa_acoustic_model) missing.push('MFA acoustic model');
+                details.textContent = 'Missing: ' + missing.join(', ');
+            } else {
+                el.style.display = 'none';
+            }
+        } catch (e) {
+            console.log('Pipeline status check failed (v2 endpoints may not be available yet)');
+        }
+    }
+    
+    async function ingestURLv2() {
+        const url = document.getElementById('ingest-url').value.trim();
+        if (!url) return;
+        const name = document.getElementById('ingest-podcast-name').value.trim() || undefined;
+        const use_whisper = document.getElementById('force-whisper').checked;
+        const whisper_model = document.getElementById('whisper-model').value;
+
+        try {
+            const r = await api('/ingest/youtube/v2/url', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url, podcast_name: name, use_whisper, whisper_model }),
+            });
+            document.getElementById('ingest-url').value = '';
+            refreshJobs();
+        } catch (e) {
+            alert('Failed to start ingestion: ' + e.message);
+        }
+    }
+
+    async function ingestChannelV2() {
+        const channel = document.getElementById('ingest-channel').value.trim();
+        if (!channel) return;
+        const limit = parseInt(document.getElementById('ingest-limit').value) || 10;
+        const name = document.getElementById('ingest-podcast-name').value.trim() || undefined;
+        const use_whisper = document.getElementById('force-whisper').checked;
+        const whisper_model = document.getElementById('whisper-model').value;
+
+        try {
+            await api('/ingest/youtube/v2/channel', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ channel, podcast_name: name, limit, use_whisper, whisper_model }),
+            });
+            document.getElementById('ingest-channel').value = '';
+            refreshJobs();
+        } catch (e) {
+            alert('Failed to start channel ingestion: ' + e.message);
+        }
+    }
+
+    // Legacy v1 functions (kept for backwards compatibility)
     async function ingestURL() {
         const url = document.getElementById('ingest-url').value.trim();
         if (!url) return;
@@ -921,27 +1010,113 @@
 
     async function refreshJobs() {
         try {
-            const data = await api('/ingest/youtube/jobs');
+            // Fetch both v1 and v2 jobs
+            const [v1Data, v2Data] = await Promise.all([
+                api('/ingest/youtube/jobs'),
+                api('/ingest/youtube/v2/jobs').catch(() => ({ jobs: [] }))
+            ]);
+            
+            const allJobs = [...v2Data.jobs, ...v1Data.jobs];
             const el = document.getElementById('ingest-jobs');
 
-            if (!data.jobs.length) {
+            if (!allJobs.length) {
                 el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">No ingestion jobs</div>';
                 if (jobRefreshInterval) { clearInterval(jobRefreshInterval); jobRefreshInterval = null; }
                 return;
             }
 
-            const hasActive = data.jobs.some(j => !['complete','failed','skipped'].includes(j.status));
+            const hasActive = allJobs.some(j => !['complete','failed','skipped'].includes(j.status));
             if (hasActive && !jobRefreshInterval) {
-                jobRefreshInterval = setInterval(refreshJobs, 3000);
+                jobRefreshInterval = setInterval(refreshJobs, 2000); // Faster refresh for v2 visibility
             } else if (!hasActive && jobRefreshInterval) {
                 clearInterval(jobRefreshInterval);
                 jobRefreshInterval = null;
             }
 
-            el.innerHTML = data.jobs.map(j => renderJob(j)).join('');
+            el.innerHTML = allJobs.map(j => j.type === 'pipeline_v2' || j.type === 'channel_v2' ? renderV2Job(j) : renderJob(j)).join('');
         } catch (e) {
             console.error('Job refresh failed:', e);
         }
+    }
+    
+    function renderV2Job(j) {
+        // V2 Pipeline job with detailed step visibility
+        const stepIcons = {
+            download: '📥',
+            transcript: '📝',
+            convert_wav: '🔊',
+            mfa_align: '🎯',
+            parse_textgrid: '📊',
+            segment: '🧠',
+            store: '💾'
+        };
+        
+        const stepNames = {
+            download: 'Download MP3',
+            transcript: 'Get Transcript',
+            convert_wav: 'Convert to WAV',
+            mfa_align: 'MFA Alignment',
+            parse_textgrid: 'Parse Timestamps',
+            segment: 'LLM Segmentation',
+            store: 'Store & Index'
+        };
+        
+        const statusBadge = j.status === 'complete' ? 'badge-success' : 
+                           j.status === 'failed' ? 'badge-danger' : 'badge-info';
+        const statusLabel = j.status === 'complete' ? '✅ Complete' :
+                           j.status === 'failed' ? '❌ Failed' :
+                           j.status === 'running' ? '🔄 Running' : '⏳ Queued';
+        
+        let stepsHtml = '';
+        if (j.steps) {
+            stepsHtml = '<div style="margin-top:12px;">';
+            for (const [key, step] of Object.entries(j.steps)) {
+                const icon = step.status === 'complete' ? '✅' :
+                            step.status === 'running' ? '🔄' :
+                            step.status === 'failed' ? '❌' :
+                            step.status === 'skipped' ? '⏭️' : '⬚';
+                const duration = step.duration_sec ? `${step.duration_sec}s` : '';
+                const stepClass = step.status === 'running' ? 'color:var(--accent);font-weight:600;' : 
+                                 step.status === 'complete' ? 'color:var(--success);' :
+                                 step.status === 'failed' ? 'color:var(--danger);' : 'color:var(--text-muted);';
+                stepsHtml += `
+                    <div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;${stepClass}">
+                        <span>${icon}</span>
+                        <span style="flex:1">${stepNames[key] || key}</span>
+                        <span style="font-size:12px;opacity:0.7">${duration}</span>
+                    </div>
+                `;
+                if (step.error) {
+                    stepsHtml += `<div style="font-size:12px;color:var(--danger);margin-left:24px;margin-bottom:4px;">${esc(step.error)}</div>`;
+                }
+            }
+            stepsHtml += '</div>';
+        }
+        
+        // Progress bar
+        const progressHtml = `
+            <div class="job-progress">
+                <div class="job-progress-bar"><div class="job-progress-fill" style="width:${j.progress_pct || 0}%"></div></div>
+            </div>
+        `;
+        
+        let details = '';
+        if (j.title) details += `<div style="font-size:14px;margin-top:4px;">${esc(j.title)}</div>`;
+        if (j.transcript_source) details += `<div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Transcript: ${j.transcript_source}</div>`;
+        if (j.segments_created) details += `<div style="font-size:12px;color:var(--success);margin-top:2px;">✓ ${j.segments_created} segments created</div>`;
+        if (j.error) details += `<div style="font-size:13px;color:var(--danger);margin-top:4px;">${esc(j.error)}</div>`;
+        
+        return `
+            <div class="job-card" style="border-color: ${j.status === 'running' ? 'var(--accent)' : 'var(--border)'};">
+                <div class="job-header">
+                    <span class="job-title">🎧 ${j.type === 'channel_v2' ? 'Channel: ' + esc(j.channel || '') : 'Video'}</span>
+                    <span class="list-item-badge ${statusBadge}">${statusLabel}</span>
+                </div>
+                ${details}
+                ${progressHtml}
+                ${stepsHtml}
+            </div>
+        `;
     }
 
     function renderJob(j) {
@@ -1167,8 +1342,26 @@
                     if (resolved) return;
                     resolved = true;
                     cleanup();
-                    audio.currentTime = startSec;
-                    resolve();
+                    // TEMP: Add offset to correct whisper vs mp3 timing mismatch
+                    // TODO: Re-transcribe from actual mp3 files for proper fix
+                    const TIMING_OFFSET_SEC = 6;
+                    const adjustedStart = startSec + TIMING_OFFSET_SEC;
+                    console.log(`[SEEK] Attempting to seek to ${adjustedStart}s (was ${startSec}s + ${TIMING_OFFSET_SEC}s offset)`);
+                    audio.currentTime = adjustedStart;
+                    console.log(`[SEEK] currentTime after set: ${audio.currentTime}s`);
+                    // Wait for seek to actually complete before playing
+                    const seekHandler = () => {
+                        audio.removeEventListener('seeked', seekHandler);
+                        console.log(`[SEEK] seeked event fired, currentTime: ${audio.currentTime}s`);
+                        resolve();
+                    };
+                    audio.addEventListener('seeked', seekHandler);
+                    // Fallback if seeked doesn't fire
+                    setTimeout(() => {
+                        audio.removeEventListener('seeked', seekHandler);
+                        console.log(`[SEEK] timeout fallback, currentTime: ${audio.currentTime}s`);
+                        resolve();
+                    }, 500);
                 };
                 
                 const onError = (e) => {

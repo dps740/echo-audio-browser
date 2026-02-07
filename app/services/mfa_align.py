@@ -235,9 +235,38 @@ def align_audio_transcript(
 
 def check_mfa_installed() -> bool:
     """Check if MFA is installed and accessible."""
+    import os
+    import platform
+    
+    # On Windows, check common conda paths directly
+    if platform.system() == "Windows":
+        common_paths = [
+            r"C:\mfa\Scripts\mfa.exe",
+            r"C:\mfa\Library\bin\mfa.exe",
+            os.path.expanduser(r"~\.conda\envs\mfa\Scripts\mfa.exe"),
+            os.path.expanduser(r"~\miniconda3\envs\mfa\Scripts\mfa.exe"),
+            os.path.expanduser(r"~\anaconda3\envs\mfa\Scripts\mfa.exe"),
+        ]
+        for path in common_paths:
+            if os.path.exists(path):
+                return True
+    
+    # Try running mfa command
     try:
         result = subprocess.run(
             ["mfa", "version"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        return result.returncode == 0
+    except:
+        pass
+    
+    # Also try mfa --help (version sometimes returns empty)
+    try:
+        result = subprocess.run(
+            ["mfa", "--help"],
             capture_output=True,
             text=True,
             timeout=10
@@ -249,13 +278,37 @@ def check_mfa_installed() -> bool:
 
 def check_mfa_models() -> dict:
     """Check if required MFA models are downloaded."""
+    import os
+    import platform
+    
     models = {
         "dictionary": False,
         "acoustic": False
     }
     
+    # On Windows, check MFA model directories directly
+    if platform.system() == "Windows":
+        mfa_user_dir = os.path.expanduser("~/Documents/MFA")
+        pretrained_dir = os.path.join(mfa_user_dir, "pretrained_models")
+        
+        dict_path = os.path.join(pretrained_dir, "dictionary", "english_mfa.dict")
+        acoustic_path = os.path.join(pretrained_dir, "acoustic", "english_mfa.zip")
+        
+        # Also check alternate locations
+        alt_dict = os.path.join(mfa_user_dir, "dictionary", "english_mfa.dict")
+        alt_acoustic = os.path.join(mfa_user_dir, "acoustic", "english_mfa.zip")
+        
+        if os.path.exists(dict_path) or os.path.exists(alt_dict):
+            models["dictionary"] = True
+        if os.path.exists(acoustic_path) or os.path.exists(alt_acoustic):
+            models["acoustic"] = True
+        
+        # If found via filesystem, return early
+        if models["dictionary"] and models["acoustic"]:
+            return models
+    
+    # Try running mfa commands
     try:
-        # Check dictionary
         result = subprocess.run(
             ["mfa", "model", "list", "dictionary"],
             capture_output=True,
@@ -264,8 +317,10 @@ def check_mfa_models() -> dict:
         )
         if "english_mfa" in result.stdout.lower():
             models["dictionary"] = True
+    except:
+        pass
         
-        # Check acoustic model
+    try:
         result = subprocess.run(
             ["mfa", "model", "list", "acoustic"],
             capture_output=True,
@@ -274,7 +329,6 @@ def check_mfa_models() -> dict:
         )
         if "english_mfa" in result.stdout.lower():
             models["acoustic"] = True
-            
     except:
         pass
     

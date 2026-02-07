@@ -3,3 +3,7 @@ INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
 INFO:     127.0.0.1:53172 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:33224 - "GET /segments/search?q=AI&limit=5 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60784 - "GET /segments/gXY1kx7zlkk_20 HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:60796 - "GET /library/episodes HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:53730 - "GET /segments/search?q=AI&limit=5 HTTP/1.1" 200 OK

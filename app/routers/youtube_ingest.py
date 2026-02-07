@@ -281,15 +281,32 @@ def _ingest_to_chromadb(episode_id, title, podcast, audio_url, segments, source=
     # Extract key terms for each segment
     ids, docs, metas = [], [], []
     
+    def truncate_at_sentence(text: str, max_chars: int = 2000) -> str:
+        """Truncate text at sentence boundary, not mid-word."""
+        if len(text) <= max_chars:
+            return text
+        # Find last sentence boundary before max_chars
+        truncated = text[:max_chars]
+        # Look for last sentence-ending punctuation
+        for end_char in ['. ', '! ', '? ', '.\n', '!\n', '?\n']:
+            last_end = truncated.rfind(end_char)
+            if last_end > max_chars * 0.5:  # Only if we keep at least 50%
+                return truncated[:last_end + 1].strip()
+        # Fallback: find last space to avoid cutting mid-word
+        last_space = truncated.rfind(' ')
+        if last_space > max_chars * 0.7:
+            return truncated[:last_space].strip() + '...'
+        return truncated.strip() + '...'
+    
     for i, seg in enumerate(llm_segments):
         # Extract key terms using GPT-4o-mini
         key_terms = _extract_key_terms(seg.transcript_text, seg.summary)
         
-        # Build enriched document for embedding
+        # Build enriched document for embedding (truncate at sentence boundary)
         enriched_doc = f"""TOPIC: {', '.join(seg.topic_tags)}
 SUMMARY: {seg.summary}
 KEY TERMS: {', '.join(key_terms)}
-TRANSCRIPT: {seg.transcript_text[:2000]}"""
+TRANSCRIPT: {truncate_at_sentence(seg.transcript_text, 2000)}"""
         
         ids.append(f"{episode_id}_{i}")
         docs.append(enriched_doc)

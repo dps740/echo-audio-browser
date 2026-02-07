@@ -33,6 +33,77 @@ class SegmentResult:
     content_type: str = "content"  # content | ad | intro | outro
 
 
+def snap_to_sentence_boundaries(
+    start_ms: int, 
+    end_ms: int, 
+    words: List[TranscriptWord],
+    max_adjust_ms: int = 5000  # Max 5 seconds adjustment
+) -> Tuple[int, int, str]:
+    """
+    Adjust segment boundaries to align with sentence boundaries.
+    Returns (adjusted_start_ms, adjusted_end_ms, adjustment_info).
+    """
+    if not words:
+        return start_ms, end_ms, "no_words"
+    
+    # Sentence-ending punctuation
+    SENTENCE_END = {'.', '!', '?'}
+    
+    # Find words in the segment
+    segment_words = [w for w in words if w.start_ms >= start_ms - max_adjust_ms and w.end_ms <= end_ms + max_adjust_ms]
+    if not segment_words:
+        return start_ms, end_ms, "no_nearby_words"
+    
+    adjusted_start = start_ms
+    adjusted_end = end_ms
+    adjustments = []
+    
+    # ADJUST START: Find nearest sentence start (word after sentence-ending punctuation)
+    # Look backwards from start_ms to find a sentence boundary
+    words_before_start = [w for w in segment_words if w.end_ms <= start_ms + 1000]  # Words ending near/before start
+    for i in range(len(words_before_start) - 1, -1, -1):
+        word = words_before_start[i]
+        # Check if this word ends with sentence punctuation
+        if any(word.word.rstrip().endswith(p) for p in SENTENCE_END):
+            # Next word is the sentence start
+            if i + 1 < len(words_before_start):
+                next_word = words_before_start[i + 1]
+                if abs(next_word.start_ms - start_ms) <= max_adjust_ms:
+                    adjusted_start = next_word.start_ms
+                    adjustments.append(f"start_snapped:{start_ms}->{adjusted_start}")
+                    break
+            else:
+                # Check words after start
+                words_after = [w for w in segment_words if w.start_ms > start_ms]
+                if words_after and abs(words_after[0].start_ms - start_ms) <= max_adjust_ms:
+                    adjusted_start = words_after[0].start_ms
+                    adjustments.append(f"start_snapped:{start_ms}->{adjusted_start}")
+                    break
+            break
+    
+    # ADJUST END: Find nearest sentence end (word with sentence-ending punctuation)
+    words_near_end = [w for w in segment_words if w.start_ms >= end_ms - 2000]  # Words starting near end
+    for word in words_near_end:
+        if any(word.word.rstrip().endswith(p) for p in SENTENCE_END):
+            if abs(word.end_ms - end_ms) <= max_adjust_ms:
+                adjusted_end = word.end_ms
+                adjustments.append(f"end_snapped:{end_ms}->{adjusted_end}")
+                break
+    
+    # If we couldn't find a sentence end forward, try looking backward
+    if adjusted_end == end_ms:
+        words_before_end = [w for w in segment_words if w.end_ms <= end_ms + 500]
+        for word in reversed(words_before_end):
+            if any(word.word.rstrip().endswith(p) for p in SENTENCE_END):
+                if abs(word.end_ms - end_ms) <= max_adjust_ms:
+                    adjusted_end = word.end_ms
+                    adjustments.append(f"end_snapped_back:{end_ms}->{adjusted_end}")
+                    break
+    
+    adjustment_info = "|".join(adjustments) if adjustments else "no_adjustment"
+    return adjusted_start, adjusted_end, adjustment_info
+
+
 SEGMENTATION_PROMPT = """You are analyzing a podcast transcript to identify SHORT, FOCUSED segments (atomic ideas).
 
 CRITICAL: SKIP NON-CONTENT
@@ -625,6 +696,14 @@ def _parse_segments(segments_json: List[Dict], transcript: TranscriptResult) -> 
                     continue
                 
                 print(f"[DEBUG] Segment {i}: resolved timestamps ({status}): {start_ms}ms - {end_ms}ms")
+                
+                # SNAP TO SENTENCE BOUNDARIES
+                orig_start, orig_end = start_ms, end_ms
+                start_ms, end_ms, snap_info = snap_to_sentence_boundaries(
+                    start_ms, end_ms, transcript.words
+                )
+                if snap_info != "no_adjustment":
+                    print(f"[DEBUG] Segment {i}: snapped to sentence boundaries: {snap_info}")
                 
                 # Validate duration
                 is_valid, msg = validate_segment_duration(start_ms, end_ms)

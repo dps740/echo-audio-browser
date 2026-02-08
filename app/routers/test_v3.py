@@ -56,6 +56,7 @@ class ClusterHit(BaseModel):
     score: float
     match_count: int
     snippet: str
+    clip_url: Optional[str] = None  # Generated MP3 clip URL
 
 
 class SearchResult(BaseModel):
@@ -159,8 +160,15 @@ async def search_episode(video_id: str, q: str, top_k: int = 5):
         seconds = total_seconds % 60
         return f"{minutes}:{seconds:02d}"
     
-    cluster_hits = [
-        ClusterHit(
+    # Generate clips and format results
+    from app.services.clip_extractor import get_clip_url
+    
+    cluster_hits = []
+    for c in clusters:
+        # Generate clip from WAV source
+        clip_url = get_clip_url(video_id, c.start_ms, c.end_ms)
+        
+        cluster_hits.append(ClusterHit(
             start_ms=c.start_ms,
             end_ms=c.end_ms,
             start_formatted=format_time(c.start_ms),
@@ -168,10 +176,9 @@ async def search_episode(video_id: str, q: str, top_k: int = 5):
             duration_s=round(c.duration_s, 1),
             score=round(c.best_score, 3),
             match_count=len(c.matches),
-            snippet=c.snippet[:200] + "..." if len(c.snippet) > 200 else c.snippet
-        )
-        for c in clusters
-    ]
+            snippet=c.snippet[:200] + "..." if len(c.snippet) > 200 else c.snippet,
+            clip_url=clip_url
+        ))
     
     # Generate helpful note about clip lengths
     if cluster_hits:
@@ -262,3 +269,28 @@ async def compare_approaches(video_id: str):
             "coverage_delta_pct": round((v3_covered - curr_covered) / total_duration_ms * 100, 1)
         }
     }
+
+
+@router.get("/clip/{video_id}")
+async def get_clip(video_id: str, start_ms: int, end_ms: int):
+    """
+    Generate and return a clip URL.
+    
+    Extracts segment from WAV source, converts to MP3.
+    
+    Example: GET /v3/clip/gXY1kx7zlkk?start_ms=60000&end_ms=120000
+    """
+    from app.services.clip_extractor import get_clip_url
+    
+    clip_url = get_clip_url(video_id, start_ms, end_ms)
+    
+    if clip_url:
+        return {
+            "video_id": video_id,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "duration_s": (end_ms - start_ms) / 1000,
+            "clip_url": clip_url
+        }
+    else:
+        raise HTTPException(500, f"Failed to generate clip for {video_id}")

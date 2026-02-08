@@ -165,8 +165,11 @@ async def debug_search(q: str = "AI"):
 
 
 # Mount audio files directory
-audio_dir = os.path.join(os.path.dirname(__file__), "audio")
-os.makedirs(audio_dir, exist_ok=True)
+# Mount the root audio directory (where actual files are)
+audio_dir = os.path.join(os.path.dirname(__file__), "..", "audio")
+if not os.path.exists(audio_dir):
+    audio_dir = os.path.join(os.path.dirname(__file__), "audio")
+    os.makedirs(audio_dir, exist_ok=True)
 app.mount("/audio", StaticFiles(directory=audio_dir), name="audio")
 
 # Mount static files for web player (if exists)

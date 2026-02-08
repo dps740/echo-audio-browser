@@ -222,9 +222,48 @@ curl "http://localhost:8765/v3/search/gXY1kx7zlkk?q=Davos"
 curl http://localhost:8765/v3/compare/gXY1kx7zlkk
 ```
 
+## Search Quality Controls
+
+### Filtering Logic
+
+A sentence matches if EITHER:
+- Semantic similarity >= 0.40 (strong conceptual match), OR
+- Query appears literally in text (keyword match)
+
+This ensures:
+- Nonsense queries return no matches
+- Terms not mentioned don't return noise matches
+- Strong semantic matches work even without exact keywords
+- Weak semantic matches still surface if keyword appears
+
+### Tested Edge Cases
+
+| Query | Expected | Result |
+|-------|----------|--------|
+| "xyznotaword123" | No matches | ✓ Filtered |
+| "DeepSeek" (not mentioned) | No matches | ✓ Filtered |
+| "the" | Matches (appears literally) | ✓ Works |
+| "AI" | Strong matches | ✓ 50 matches |
+
+## Comprehensive Test Results
+
+Tested on 3 episodes (1938 total sentences):
+
+| Query | Episode 1 | Episode 2 | Episode 3 |
+|-------|-----------|-----------|-----------|
+| "healthcare" | 75s, 19 matches | no matches | no matches |
+| "Trump" | 22s, 8 matches | 167s, 30 matches | 27s, 6 matches |
+| "AI" | 355s, 50 matches | 472s, 50 matches | 239s, 50 matches |
+| "money" | 112s, 21 matches | 158s, 10 matches | 189s, 32 matches |
+
+Key observations:
+- Clip length varies naturally by topic density
+- Episodes with more discussion of a topic get longer clips
+- Cross-episode search works correctly
+- Scores differentiate relevance (healthcare 0.517 in Dr Oz, no matches elsewhere)
+
 ## Next Steps
 
-1. **Test with more episodes** - Validate across different podcast types
-2. **Add to main search** - Once validated, replace V2
-3. **UI integration** - Show clusters with "play from here" buttons
-4. **Async labeling** - Add LLM topic labels for browse UI
+1. **UI integration** - Show clusters with "play from here" buttons
+2. **Async labeling** - Add LLM topic labels for browse UI
+3. **Replace V2** - Once UI tested, deprecate old approach

@@ -1,5 +1,10 @@
 """
 Test endpoints for V3 segmentation.
+
+V3 uses:
+- Sentence-level indexing (99% coverage vs 49% with V2)
+- Cluster-based adaptive clip length
+- No fixed segments - clips sized by query specificity
 """
 
 from fastapi import APIRouter, HTTPException
@@ -13,6 +18,11 @@ from app.services.segmentation_v3 import (
     get_embeddings,
     SegmentV3,
     Sentence
+)
+from app.services.search_v3 import (
+    search_with_clusters,
+    format_cluster_for_display,
+    MatchCluster
 )
 from app.config import settings
 
@@ -36,20 +46,24 @@ class SegmentationResult(BaseModel):
     stats: dict
 
 
-class SearchHit(BaseModel):
-    segment_idx: int
+class ClusterHit(BaseModel):
+    """A search result cluster - adaptive clip length based on query."""
     start_ms: int
     end_ms: int
+    start_formatted: str
+    end_formatted: str
     duration_s: float
     score: float
+    match_count: int
     snippet: str
-    label: str
 
 
 class SearchResult(BaseModel):
     query: str
-    hits: List[SearchHit]
-    total_sentences_searched: int
+    clusters: List[ClusterHit]
+    total_sentences: int
+    total_matches: int
+    note: str
 
 
 # Global cache for testing
@@ -115,7 +129,11 @@ async def segment_episode(video_id: str):
 @router.get("/search/{video_id}", response_model=SearchResult)
 async def search_episode(video_id: str, q: str, top_k: int = 5):
     """
-    Search within a V3-segmented episode.
+    Search within a V3-segmented episode using cluster-based adaptive clips.
+    
+    The clip length adapts to query specificity:
+    - Broad query ("AI") → longer clips where topic is discussed
+    - Specific query ("Chinese AI infrastructure") → shorter, focused clips
     
     Example: GET /v3/search/gXY1kx7zlkk?q=AI
     """
@@ -124,59 +142,55 @@ async def search_episode(video_id: str, q: str, top_k: int = 5):
     
     data = _cache[video_id]
     sentences = data['sentences']
-    segments = data['segments']
     
-    # Get query embedding
-    query_embedding = get_embeddings([q])[0]
-    query_norm = query_embedding / np.linalg.norm(query_embedding)
+    # Use cluster-based search
+    clusters, all_matches = search_with_clusters(
+        query=q,
+        sentences=sentences,
+        top_k_sentences=50,
+        gap_threshold_ms=60_000,  # 60s gap = new cluster
+        max_clusters=top_k
+    )
     
-    # Score all sentences
-    scores = []
-    for i, sent in enumerate(sentences):
-        if sent.embedding is not None:
-            sent_norm = sent.embedding / np.linalg.norm(sent.embedding)
-            sim = np.dot(query_norm, sent_norm)
-            scores.append((i, sim, sent))
-        
-        # Also boost for keyword match
-        if q.lower() in sent.text.lower():
-            # Find existing score and boost it
-            for j, (idx, score, s) in enumerate(scores):
-                if idx == i:
-                    scores[j] = (idx, score + 0.2, s)  # Boost
-                    break
+    # Format results
+    def format_time(ms: int) -> str:
+        total_seconds = ms // 1000
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        return f"{minutes}:{seconds:02d}"
     
-    # Sort by score
-    scores.sort(key=lambda x: -x[1])
+    cluster_hits = [
+        ClusterHit(
+            start_ms=c.start_ms,
+            end_ms=c.end_ms,
+            start_formatted=format_time(c.start_ms),
+            end_formatted=format_time(c.end_ms),
+            duration_s=round(c.duration_s, 1),
+            score=round(c.best_score, 3),
+            match_count=len(c.matches),
+            snippet=c.snippet[:200] + "..." if len(c.snippet) > 200 else c.snippet
+        )
+        for c in clusters
+    ]
     
-    # Get top hits and map to segments
-    hits = []
-    seen_segments = set()
-    
-    for sent_idx, score, sent in scores[:top_k * 3]:  # Get more candidates
-        # Find which segment this sentence belongs to
-        for seg_idx, seg in enumerate(segments):
-            if seg.start_ms <= sent.start_ms <= seg.end_ms:
-                if seg_idx not in seen_segments:
-                    seen_segments.add(seg_idx)
-                    hits.append(SearchHit(
-                        segment_idx=seg_idx,
-                        start_ms=seg.start_ms,
-                        end_ms=seg.end_ms,
-                        duration_s=round(seg.duration_s, 1),
-                        score=round(float(score), 3),
-                        snippet=sent.text[:150] + "..." if len(sent.text) > 150 else sent.text,
-                        label=seg.label or f"Segment {seg_idx + 1}"
-                    ))
-                break
-        
-        if len(hits) >= top_k:
-            break
+    # Generate helpful note about clip lengths
+    if cluster_hits:
+        avg_duration = sum(c.duration_s for c in cluster_hits) / len(cluster_hits)
+        if avg_duration > 300:
+            note = "Broad topic - multiple long discussions found"
+        elif avg_duration > 120:
+            note = "Medium topic - several focused discussions found"
+        else:
+            note = "Specific topic - short, focused clips found"
+    else:
+        note = "No matches found"
     
     return SearchResult(
         query=q,
-        hits=hits,
-        total_sentences_searched=len(sentences)
+        clusters=cluster_hits,
+        total_sentences=len(sentences),
+        total_matches=len(all_matches),
+        note=note
     )
 
 

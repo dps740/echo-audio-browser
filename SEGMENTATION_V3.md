@@ -5,7 +5,18 @@
 V3 replaces the LLM-based segmentation with a sentence-level embedding approach that achieves:
 - **99% coverage** (vs 49% with current approach)
 - **80-85% cheaper** indexing ($0.01 vs $0.06 per episode)
-- **No LLM in search path** (faster, cheaper queries)
+- **Adaptive clip length** based on query specificity
+- **No fixed segments** - clips sized by the data itself
+
+## Key Innovation: Cluster-Based Adaptive Clips
+
+Instead of fixed-length segments, V3:
+1. Indexes every sentence with embeddings
+2. At search time, finds matching sentences
+3. Clusters matches by time proximity
+4. Clip length = cluster extent
+
+**Result:** Broad queries ("AI") get long clips. Specific queries ("Chinese AI infrastructure") get short clips. The data determines the boundaries, not arbitrary rules.
 
 ## Architecture
 
@@ -21,173 +32,199 @@ Sentence Segmentation (pause-based, 800ms threshold)
 Embed Each Sentence (text-embedding-3-small)
     ↓
 Store: sentences + embeddings + timestamps
-    ↓
-Async: Generate topic labels via LLM (non-blocking)
 ```
+
+**No LLM segmentation. No fixed boundaries. Just sentences + embeddings.**
 
 ### Search-Time Pipeline
 
 ```
-Query "AI"
+Query "Chinese AI"
     ↓
-Parallel:
-    a) Embed query → Vector search sentences (top-30)
-    b) Full-text keyword search (top-20)
+Embed query
     ↓
-Merge results (Reciprocal Rank Fusion)
+Vector search: find top 50 matching sentences
     ↓
-Expand each hit to playable context:
-    - Backward to previous pause/topic shift
-    - Forward to next pause/topic shift
-    - CAP at 3 minutes max
+Keyword boost: +0.15 for literal matches
     ↓
-Deduplicate overlapping results
+Cluster by time: gap > 60s = new cluster
     ↓
-Return top-5 with snippets + play buttons
+Score clusters:
+    - 40% best match score
+    - 40% match count (density)
+    - 20% average match score
+    ↓
+Return top 5 clusters as playable clips
 ```
 
-## Key Parameters
+## Example Results
+
+From testing on All-In Podcast episode (90 min):
+
+| Query | #1 Result | Why |
+|-------|-----------|-----|
+| "AI" | 4.6 min (11 matches) | Broad topic, many matches clustered |
+| "Chinese AI" | 6.3 min (16 matches) | Substantial discussion |
+| "Davos" | 8.8 min (23 matches) | Main topic segment |
+| "Trump Greenland" | 2 min (7 matches) | Focused discussion |
+| "immigration" | 3.7 min (11 matches) | Medium topic |
+
+**Key insight:** Passing mentions (1 match) rank last. Dense discussions (many matches) rank first.
+
+## Why No Hard Caps
+
+We considered adding a 3-minute max segment length, but rejected it:
+- A 22-minute continuous conversation about AI is legitimate
+- Forcing arbitrary breaks creates artificial cuts
+- The cluster approach handles this naturally: specific queries still return the relevant portion
+
+## Parameters
 
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
 | Pause threshold | 800ms | Natural sentence boundaries |
-| Embedding model | text-embedding-3-small | Cheap ($0.02/1M tokens), good quality |
-| Vector search top-k | 30 | Enough candidates for variety |
-| Keyword search top-k | 20 | Safety net for exact matches |
-| Max segment length | 180s (3 min) | Prevents runaway segments |
-| Min segment length | 15s | Merge shorter segments |
-| Context expansion | ±30s or to boundary | Natural playback start/end |
+| Embedding model | text-embedding-3-small | Cheap ($0.02/1M tokens) |
+| Vector search top-k | 50 | Enough for good clustering |
+| Gap threshold | 60s | Separate discussions |
+| Keyword boost | 0.15 | Ensures literal matches surface |
 
-## Boundary Detection Algorithm
+## Cluster Scoring Formula
 
 ```python
-def find_boundaries(embeddings, sentences):
-    """
-    Find topic boundaries using similarity drops.
-    
-    Two mechanisms:
-    1. Sharp drop: adjacent sentence similarity < 0.15 (10th percentile)
-    2. Max length: force split if segment exceeds 180 seconds
-    """
-    boundaries = []
-    
-    # Calculate all adjacent similarities
-    sims = [cosine_sim(embeddings[i-1], embeddings[i]) 
-            for i in range(1, len(embeddings))]
-    
-    # Adaptive threshold: 10th percentile of similarities
-    threshold = np.percentile(sims, 10)
-    
-    last_boundary_time = sentences[0].start_ms
-    
-    for i in range(1, len(embeddings)):
-        current_time = sentences[i].start_ms
-        segment_duration = current_time - last_boundary_time
-        
-        # Force boundary if segment too long
-        if segment_duration > 180_000:  # 3 minutes
-            boundaries.append(i)
-            last_boundary_time = current_time
-            continue
-        
-        # Natural boundary if similarity drops
-        if sims[i-1] < threshold:
-            boundaries.append(i)
-            last_boundary_time = current_time
-    
-    return boundaries
+cluster_score = (
+    0.4 * best_individual_score +      # Best sentence match
+    0.4 * min(match_count / 10, 1.0) +  # Density (caps at 10)
+    0.2 * average_match_score           # Overall quality
+)
 ```
 
-## Post-Processing
-
-### Merge Short Segments
-```python
-def merge_short_segments(segments, min_duration=15_000):
-    """Merge segments shorter than 15 seconds with neighbors."""
-    merged = []
-    for seg in segments:
-        if merged and (seg.end_ms - seg.start_ms) < min_duration:
-            # Merge with previous
-            merged[-1].end_ms = seg.end_ms
-        else:
-            merged.append(seg)
-    return merged
-```
-
-### Context Expansion for Search Results
-```python
-def expand_to_context(sentence_idx, sentences, boundaries):
-    """Expand a search hit to playable context."""
-    # Find containing segment
-    seg_start = 0
-    seg_end = len(sentences) - 1
-    
-    for b in boundaries:
-        if b <= sentence_idx:
-            seg_start = b
-        if b > sentence_idx:
-            seg_end = b - 1
-            break
-    
-    # Return with padding
-    start_ms = max(0, sentences[seg_start].start_ms - 3000)  # 3s padding
-    end_ms = sentences[seg_end].end_ms + 3000
-    
-    return start_ms, end_ms
-```
+This ensures:
+- Single mentions don't outrank discussions
+- Dense clusters rank higher
+- Quality still matters
 
 ## Cost Comparison
 
 | Operation | Current (LLM) | V3 (Embeddings) |
 |-----------|---------------|-----------------|
 | Index 1 episode | ~$0.06 | ~$0.01 |
-| 1 search query | ~$0.003 | ~$0.00001 |
+| 1 search query | ~$0.003 | ~$0.0001 |
 | 1000 episodes | ~$60 | ~$10 |
-| 10,000 queries | ~$30 | ~$0.10 |
 
-## Storage Requirements
+## Coverage Comparison
 
-Per episode (90 min, ~700 sentences):
-- Embeddings: 700 × 1536 × 4 bytes = ~4.3 MB
-- Metadata: ~50 KB
-- **Total: ~4.5 MB per episode**
+| Approach | Coverage | Reason |
+|----------|----------|--------|
+| Current (V2) | ~49% | LLM only indexes "identified topics" |
+| V3 | ~99% | Every sentence indexed |
 
-1000 episodes = ~4.5 GB (fits easily in Qdrant/Chroma)
+## API Endpoints
 
-## Quality Metrics
+### Segment an Episode
+```
+POST /v3/segment/{video_id}
 
-Target metrics for V3:
-- Coverage: >95% (vs current ~50%)
-- Search latency p95: <200ms
-- No segments >3 min
-- No segments <15s (after merging)
-- Topic label accuracy: >80% (async LLM labeling)
+Response:
+{
+    "episode": "gXY1kx7zlkk",
+    "total_sentences": 728,
+    "total_segments": 57,
+    "coverage_pct": 98.6,
+    "segments": [...],
+    "stats": {
+        "mean_duration_s": 93.4,
+        "min_duration_s": 22.0,
+        "max_duration_s": 212.4
+    }
+}
+```
 
-## Migration Path
+### Search with Adaptive Clips
+```
+GET /v3/search/{video_id}?q=Chinese+AI
 
-1. **Phase 1**: Implement V3 indexing alongside V2
-2. **Phase 2**: Run both, compare search results
-3. **Phase 3**: A/B test with users
-4. **Phase 4**: Deprecate V2 if V3 wins
+Response:
+{
+    "query": "Chinese AI",
+    "clusters": [
+        {
+            "start_ms": 381700,
+            "end_ms": 419500,
+            "start_formatted": "63:37",
+            "end_formatted": "69:55",
+            "duration_s": 378.0,
+            "score": 0.712,
+            "match_count": 16,
+            "snippet": "of AI from being centrally..."
+        },
+        ...
+    ],
+    "total_sentences": 728,
+    "total_matches": 50,
+    "note": "Medium topic - several focused discussions found"
+}
+```
 
-## Files Changed
+### Compare V3 vs Current
+```
+GET /v3/compare/{video_id}
 
-- `app/services/segmentation_v3.py` — New segmentation logic
-- `app/services/search_v3.py` — New search with expansion
-- `app/routers/ingest.py` — Add V3 ingest endpoint
-- `app/routers/search.py` — Add V3 search endpoint
+Response:
+{
+    "v3": {"coverage_pct": 98.6, "segments": 57},
+    "current": {"coverage_pct": 49.4, "segments": 28},
+    "winner": {"coverage": "V3", "coverage_delta_pct": 49.2}
+}
+```
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `app/services/segmentation_v3.py` | Sentence extraction + embedding |
+| `app/services/search_v3.py` | Cluster-based search |
+| `app/routers/test_v3.py` | API endpoints |
+| `SEGMENTATION_V3.md` | This doc |
+
+## Design History
+
+### 2026-02-08: Initial Design
+
+**Process:**
+1. Identified current approach only indexes 49% of content
+2. Spawned adversarial agents to attack proposals (3 iterations)
+3. Tested on 3 real episodes with embeddings
+4. Discovered gradual topic drift problem (22-min segment)
+5. Rejected hard caps in favor of cluster-based approach
+6. Implemented and validated cluster scoring
+
+**Key decisions:**
+- No LLM in segmentation (cost, coverage)
+- No fixed segment lengths (arbitrary)
+- Cluster by time proximity (natural boundaries)
+- Score by density, not just best match (quality ranking)
 
 ## Testing
 
-Run evaluation script:
 ```bash
 cd ~/clawd/projects/echo-audio-browser
 source venv/bin/activate
-python scripts/final_comparison.py
+
+# Segment an episode
+curl -X POST http://localhost:8765/v3/segment/gXY1kx7zlkk
+
+# Search
+curl "http://localhost:8765/v3/search/gXY1kx7zlkk?q=AI"
+curl "http://localhost:8765/v3/search/gXY1kx7zlkk?q=Chinese+AI"
+curl "http://localhost:8765/v3/search/gXY1kx7zlkk?q=Davos"
+
+# Compare to current approach
+curl http://localhost:8765/v3/compare/gXY1kx7zlkk
 ```
 
-## History
+## Next Steps
 
-- 2026-02-08: Initial design after adversarial review with sub-agents
-- Key insight: Current approach only indexes 49% of content
-- 10 flaws identified in iterative review, addressed in V3
+1. **Test with more episodes** - Validate across different podcast types
+2. **Add to main search** - Once validated, replace V2
+3. **UI integration** - Show clusters with "play from here" buttons
+4. **Async labeling** - Add LLM topic labels for browse UI

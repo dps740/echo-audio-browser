@@ -58,14 +58,20 @@ def get_query_embedding(query: str) -> np.ndarray:
 def search_sentences(
     query: str,
     sentences: List,  # List of Sentence objects with .embedding
-    top_k: int = 50
+    top_k: int = 50,
+    min_semantic_score: float = 0.40,  # Min for pure semantic match
+    keyword_boost: float = 0.15
 ) -> List[SearchMatch]:
     """
     Find top matching sentences for a query.
     
-    Combines:
-    - Semantic similarity (embedding cosine)
-    - Keyword boost (literal match)
+    A sentence matches if EITHER:
+    - Semantic similarity >= min_semantic_score (strong conceptual match), OR
+    - Query appears literally in text (keyword match, gets boost)
+    
+    This filters out noise while allowing:
+    - Strong semantic matches even without exact keywords
+    - Weak semantic matches IF the keyword appears literally
     """
     query_embedding = get_query_embedding(query)
     query_norm = query_embedding / np.linalg.norm(query_embedding)
@@ -81,10 +87,15 @@ def search_sentences(
         sent_norm = sent.embedding / np.linalg.norm(sent.embedding)
         semantic_score = float(np.dot(query_norm, sent_norm))
         
-        # Keyword boost
-        keyword_boost = 0.15 if query_lower in sent.text.lower() else 0
+        # Check for keyword match
+        has_keyword = query_lower in sent.text.lower()
         
-        total_score = semantic_score + keyword_boost
+        # Filter: require strong semantic OR keyword match
+        if semantic_score < min_semantic_score and not has_keyword:
+            continue
+        
+        # Apply keyword boost
+        total_score = semantic_score + (keyword_boost if has_keyword else 0)
         
         matches.append(SearchMatch(
             sentence_idx=i,

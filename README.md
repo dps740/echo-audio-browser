@@ -69,7 +69,7 @@ curl "http://localhost:8765/v3/search-refined/VIDEO_ID?q=AI"
 
 | File | Purpose |
 |------|---------|
-| `SEGMENTATION_V3.md` | Current pipeline docs |
+| `PIPELINE.md` | Full pipeline documentation |
 | `app/services/segmentation_v3.py` | VTT parsing, sentence segmentation |
 | `app/services/segment_refiner.py` | LLM boundary + snippet generation |
 | `app/services/search_v3.py` | Cluster-based search |

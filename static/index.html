@@ -261,6 +261,9 @@
             transition: all 0.15s;
         }
         .podcast-card:hover { border-color: var(--accent); background: var(--bg-hover); }
+        .podcast-card.in-queue { border-color: var(--success); background: rgba(74, 222, 128, 0.1); }
+        .podcast-card.in-queue::after { content: '✓ In Queue'; position: absolute; top: 8px; right: 8px; font-size: 11px; color: var(--success); }
+        .podcast-card { position: relative; }
         .podcast-card .pc-name { font-weight: 600; margin-bottom: 4px; }
         .podcast-card .pc-desc { font-size: 13px; color: var(--text-secondary); }
         .podcast-card .pc-handle { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
@@ -426,17 +429,34 @@
 
         <!-- Channel batch -->
         <div class="card">
-            <div class="card-title">Batch Ingest Channel</div>
+            <div class="card-title">Select Podcasts</div>
             <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px;">
-                Select a curated podcast or enter a YouTube channel handle to ingest multiple episodes.
+                Click podcasts to add them to your batch queue.
             </p>
             <div class="podcast-grid" id="curated-podcasts"></div>
             <div style="margin-top: 16px;">
                 <div class="input-row">
-                    <input type="text" id="ingest-channel" placeholder="@channel_handle">
-                    <input type="number" id="ingest-limit" value="10" min="1" max="100" style="max-width: 100px;">
-                    <button class="btn btn-primary" onclick="ingestChannelV2()">▶ Ingest Channel</button>
+                    <input type="text" id="ingest-channel" placeholder="@channel_handle or paste URL">
+                    <input type="number" id="ingest-limit" value="10" min="1" max="100" style="max-width: 100px;" title="Episodes per channel">
+                    <button class="btn" onclick="addToQueue()">+ Add to Queue</button>
                 </div>
+            </div>
+        </div>
+
+        <!-- Batch Queue -->
+        <div class="card">
+            <div class="card-title" style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Batch Queue</span>
+                <span id="queue-count" style="font-size: 12px; color: var(--text-secondary);">0 items</span>
+            </div>
+            <div id="batch-queue" style="margin: 12px 0; max-height: 300px; overflow-y: auto;">
+                <div class="empty-state" style="padding: 20px; text-align: center; color: var(--text-muted);">
+                    Click podcasts above or enter a channel to add to queue
+                </div>
+            </div>
+            <div style="display: flex; gap: 12px; margin-top: 12px;">
+                <button class="btn btn-primary" onclick="startBatch()" id="start-batch-btn" disabled>▶ Start Batch Download</button>
+                <button class="btn" onclick="clearQueue()">Clear Queue</button>
             </div>
         </div>
 
@@ -791,11 +811,104 @@
         refreshJobs();
     }
 
+    // Batch queue state
+    const batchQueue = [];
+
     function selectPodcast(channel, name) {
-        document.getElementById('ingest-channel').value = channel;
-        document.getElementById('ingest-podcast-name').value = name;
-        // Scroll to the input
-        document.getElementById('ingest-channel').focus();
+        addToQueueItem(channel, name);
+    }
+
+    function addToQueue() {
+        const channel = document.getElementById('ingest-channel').value.trim();
+        if (!channel) return;
+        const name = channel.replace('@', '');
+        addToQueueItem(channel, name);
+        document.getElementById('ingest-channel').value = '';
+    }
+
+    function addToQueueItem(channel, name) {
+        // Check if already in queue
+        if (batchQueue.some(q => q.channel === channel)) {
+            return; // Already added
+        }
+        const limit = parseInt(document.getElementById('ingest-limit').value) || 10;
+        batchQueue.push({ channel, name, limit });
+        renderQueue();
+    }
+
+    function removeFromQueue(index) {
+        batchQueue.splice(index, 1);
+        renderQueue();
+    }
+
+    function clearQueue() {
+        batchQueue.length = 0;
+        renderQueue();
+    }
+
+    function renderQueue() {
+        const el = document.getElementById('batch-queue');
+        const countEl = document.getElementById('queue-count');
+        const startBtn = document.getElementById('start-batch-btn');
+        
+        countEl.textContent = `${batchQueue.length} item${batchQueue.length !== 1 ? 's' : ''}`;
+        startBtn.disabled = batchQueue.length === 0;
+        
+        if (batchQueue.length === 0) {
+            el.innerHTML = '<div class="empty-state" style="padding: 20px; text-align: center; color: var(--text-muted);">Click podcasts above or enter a channel to add to queue</div>';
+        } else {
+            el.innerHTML = batchQueue.map((q, i) => `
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: var(--bg-tertiary); border-radius: 6px; margin-bottom: 8px;">
+                    <div>
+                        <div style="font-weight: 500;">${esc(q.name)}</div>
+                        <div style="font-size: 12px; color: var(--text-muted);">${esc(q.channel)} • ${q.limit} episodes</div>
+                    </div>
+                    <button class="btn" style="padding: 4px 10px; font-size: 12px;" onclick="removeFromQueue(${i})">✕</button>
+                </div>
+            `).join('');
+        }
+        
+        // Update podcast card states
+        document.querySelectorAll('.podcast-card').forEach(card => {
+            const handle = card.querySelector('.pc-handle')?.textContent;
+            if (handle && batchQueue.some(q => q.channel === handle)) {
+                card.classList.add('in-queue');
+            } else {
+                card.classList.remove('in-queue');
+            }
+        });
+    }
+
+    async function startBatch() {
+        if (batchQueue.length === 0) return;
+        
+        const startBtn = document.getElementById('start-batch-btn');
+        startBtn.disabled = true;
+        startBtn.textContent = '⏳ Starting batch...';
+        
+        // Start each channel ingestion
+        for (const item of batchQueue) {
+            try {
+                await api('/ingest/youtube/v2/channel', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        channel: item.channel,
+                        podcast_name: item.name,
+                        limit: item.limit,
+                        use_whisper: document.getElementById('force-whisper')?.checked || false,
+                        whisper_model: document.getElementById('whisper-model')?.value || 'tiny'
+                    })
+                });
+            } catch (e) {
+                console.error('Failed to start:', item.channel, e);
+            }
+        }
+        
+        // Clear queue and refresh
+        batchQueue.length = 0;
+        renderQueue();
+        startBtn.textContent = '▶ Start Batch Download';
+        refreshJobs();
     }
 
     async function reanalyzeLibrary() {

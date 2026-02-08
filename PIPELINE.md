@@ -62,11 +62,29 @@ GET /v3/search-refined/{video_id}?q=AI
 **Steps:**
 
 1. **Embed query** → Same embedding model
-2. **Vector search** → Find segments matching query
-3. **Return results** → Pre-computed snippets, no LLM calls
-4. **Generate clip** → Extract MP3 from WAV (cached after first request)
+2. **Vector search** → Find sentences matching query
+3. **Segment topic filtering** → Check if segment is *about* the topic (not just mentions it)
+4. **Return results** → Pre-computed snippets, no LLM calls
+5. **Generate clip** → Extract MP3 from WAV (cached after first request)
 
 **Cost:** Free (no API calls, just vector similarity)
+
+### Segment Topic Relevance
+
+The key insight: a segment might contain a keyword but not be *about* that topic.
+
+**Example:** Query "AI" might match a geopolitics segment that briefly mentions "AI or best-in-class" — but the segment isn't about AI.
+
+**Solution:** Check if the segment's overall topic relates to the query:
+
+1. Average all sentence embeddings in segment → "what is this segment about?"
+2. Compare segment topic embedding to query embedding
+3. Only include if relevance > 0.40
+
+This filters out passing mentions and ensures results are genuinely about the query topic.
+
+**Before:** Query "AI" returned geopolitics segment (relevance 0.38)
+**After:** Only AI segments returned (relevance 0.41-0.48)
 
 ---
 
@@ -134,6 +152,8 @@ Clips are cached - subsequent requests for same segment are instant.
 4. **Specific snippets** - LLM prompted to be specific ("personal AI assistants replacing chatbots") not vague ("discussion about AI").
 
 5. **Boundary refinement** - LLM finds where topic actually starts, not just first matching sentence.
+
+6. **Segment topic filtering** - Search checks if segment is *about* the query topic, not just contains keywords. Filters passing mentions (relevance < 0.40).
 
 ---
 

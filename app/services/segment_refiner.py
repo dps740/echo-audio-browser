@@ -227,8 +227,8 @@ def refine_segments(
 
 def detect_topic_boundaries(
     sentences: List,
-    similarity_threshold: float = 0.5,
-    min_segment_sentences: int = 5
+    similarity_threshold: float = 0.35,  # Lower = less aggressive splitting
+    min_segment_sentences: int = 10  # Longer minimum segments
 ) -> List[Tuple[int, int]]:
     """
     Detect topic boundaries using embedding similarity.

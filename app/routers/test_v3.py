@@ -422,19 +422,34 @@ async def search_refined(video_id: str, q: str, top_k: int = 5):
     query_emb = get_query_embedding(q)
     query_norm = query_emb / np.linalg.norm(query_emb)
     
-    # Score each segment by best matching sentence
+    # Score each segment by match count AND best score
+    # Requires multiple strong matches, not just one passing mention
     scored_segments = []
+    MATCH_THRESHOLD = 0.35  # Minimum score for a sentence to count as a match
+    
     for seg in refined:
         best_score = 0
+        match_count = 0
         for idx in seg.sentence_indices:
             sent = sentences[idx]
             if sent.embedding is not None:
                 sent_norm = sent.embedding / np.linalg.norm(sent.embedding)
                 score = float(np.dot(query_norm, sent_norm))
                 best_score = max(best_score, score)
-        scored_segments.append((seg, best_score))
+                if score >= MATCH_THRESHOLD:
+                    match_count += 1
+        
+        # Combined score: best match + density bonus
+        # Segments with multiple matches rank higher
+        density_bonus = min(match_count / 5, 0.3)  # Up to 0.3 bonus for 5+ matches
+        combined_score = best_score + density_bonus
+        
+        # Require at least 2 sentence matches to avoid passing mentions
+        # Single mentions even with high score are often not the main topic
+        if match_count >= 2:
+            scored_segments.append((seg, combined_score, match_count))
     
-    # Sort by score, return top_k
+    # Sort by combined score, return top_k
     scored_segments.sort(key=lambda x: -x[1])
     top_segments = scored_segments[:top_k]
     
@@ -448,10 +463,7 @@ async def search_refined(video_id: str, q: str, top_k: int = 5):
         return f"{minutes}:{seconds:02d}"
     
     results = []
-    for seg, score in top_segments:
-        if score < 0.3:  # Skip low-relevance results
-            continue
-        
+    for seg, score, match_count in top_segments:
         clip_url = get_clip_url(video_id, seg.start_ms, seg.end_ms)
         
         results.append({
@@ -461,7 +473,8 @@ async def search_refined(video_id: str, q: str, top_k: int = 5):
             "end_formatted": format_time(seg.end_ms),
             "duration_s": round((seg.end_ms - seg.start_ms) / 1000, 1),
             "score": round(score, 3),
-            "snippet": seg.snippet,  # LLM-generated specific summary
+            "match_count": match_count,  # How many sentences matched
+            "snippet": seg.snippet,
             "clip_url": clip_url,
             "boundary_refined": seg.start_ms != seg.original_start_ms
         })

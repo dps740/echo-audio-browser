@@ -454,9 +454,16 @@
                     Click podcasts above or enter a channel to add to queue
                 </div>
             </div>
-            <div style="display: flex; gap: 12px; margin-top: 12px;">
-                <button class="btn btn-primary" onclick="startBatch()" id="start-batch-btn" disabled>▶ Start Batch Download</button>
+            <div style="display: flex; gap: 12px; margin-top: 12px; align-items: center;">
+                <select id="batch-mode" style="padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-secondary);">
+                    <option value="download-only">📥 Download Only (MP3 + VTT)</option>
+                    <option value="full-pipeline">⚙️ Full Pipeline (Download + Index)</option>
+                </select>
+                <button class="btn btn-primary" onclick="startBatch()" id="start-batch-btn" disabled>▶ Start Batch</button>
                 <button class="btn" onclick="clearQueue()">Clear Queue</button>
+            </div>
+            <div id="mode-info" style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">
+                📥 Downloads MP3 + subtitles only. Upload to Drive for server processing.
             </div>
         </div>
 
@@ -883,22 +890,32 @@
         if (batchQueue.length === 0) return;
         
         const startBtn = document.getElementById('start-batch-btn');
+        const mode = document.getElementById('batch-mode').value;
         startBtn.disabled = true;
         startBtn.textContent = '⏳ Starting batch...';
+        
+        // Choose endpoint based on mode
+        const endpoint = mode === 'download-only' 
+            ? '/ingest/youtube/download-only'
+            : '/ingest/youtube/v2/channel';
         
         // Start each channel ingestion
         for (const item of batchQueue) {
             try {
-                await api('/ingest/youtube/v2/channel', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
+                const body = mode === 'download-only'
+                    ? { channel: item.channel, podcast_name: item.name, limit: item.limit }
+                    : {
                         channel: item.channel,
                         podcast_name: item.name,
                         limit: item.limit,
                         use_whisper: document.getElementById('force-whisper')?.checked || false,
                         whisper_model: document.getElementById('whisper-model')?.value || 'tiny'
-                    })
+                    };
+                
+                await api(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
                 });
             } catch (e) {
                 console.error('Failed to start:', item.channel, e);
@@ -908,9 +925,24 @@
         // Clear queue and refresh
         batchQueue.length = 0;
         renderQueue();
-        startBtn.textContent = '▶ Start Batch Download';
+        startBtn.textContent = '▶ Start Batch';
         refreshJobs();
     }
+    
+    // Update mode info text when selection changes
+    document.addEventListener('DOMContentLoaded', () => {
+        const modeSelect = document.getElementById('batch-mode');
+        const modeInfo = document.getElementById('mode-info');
+        if (modeSelect && modeInfo) {
+            modeSelect.addEventListener('change', () => {
+                if (modeSelect.value === 'download-only') {
+                    modeInfo.textContent = '📥 Downloads MP3 + subtitles only. Upload to Drive for server processing.';
+                } else {
+                    modeInfo.textContent = '⚙️ Downloads and indexes to ChromaDB. Requires MFA for accurate timestamps.';
+                }
+            });
+        }
+    });
 
     async function reanalyzeLibrary() {
         const btn = document.getElementById('reanalyze-btn');
@@ -1374,6 +1406,33 @@
             }
             if (j.status === 'complete' && j.success) {
                 details += `<div style="margin-top:8px;font-size:13px;color:var(--success)">✅ ${j.success} transcripts saved to <code>app/transcripts/</code></div>`;
+            }
+        }
+
+        // Download Only progress
+        if (j.type === 'download_only') {
+            details += `<div style="font-size:12px;color:var(--accent);margin-bottom:6px">📥 <strong>Download Only</strong> (MP3 + VTT)</div>`;
+            if (j.total_videos) {
+                const done = j.current_video || 0;
+                const pct = Math.round((done / j.total_videos) * 100);
+                details += `
+                    <div class="job-progress">
+                        <span style="font-size:13px;color:var(--text-secondary)">${done} / ${j.total_videos} videos</span>
+                        <div class="job-progress-bar"><div class="job-progress-fill" style="width:${pct}%"></div></div>
+                    </div>
+                `;
+            }
+            if (j.videos && j.videos.length) {
+                const recent = j.videos.slice(-5).reverse();
+                details += `<div class="job-videos">${recent.map(v => `
+                    <div class="job-video">
+                        <span>${esc((v.title || '').substring(0, 50))}</span>
+                        <span class="list-item-badge ${v.status === 'complete' ? 'badge-success' : v.status === 'skipped' ? 'badge-warning' : v.status === 'failed' ? 'badge-danger' : 'badge-info'}">${v.status}${v.vtt === false ? ' (no subs)' : ''}</span>
+                    </div>
+                `).join('')}</div>`;
+            }
+            if (j.status === 'complete' && j.output_dir) {
+                details += `<div style="margin-top:8px;font-size:13px;color:var(--success)">📁 Files saved to: <code>${esc(j.output_dir)}</code></div>`;
             }
         }
 

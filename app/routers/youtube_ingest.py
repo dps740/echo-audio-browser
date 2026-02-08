@@ -1459,6 +1459,196 @@ async def list_transcripts():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Download Only - MP3 + VTT (no processing, for desktop use)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class DownloadOnlyRequest(BaseModel):
+    channel: str
+    podcast_name: Optional[str] = None
+    limit: int = 10
+
+
+def _download_only_channel(job_id: str, channel: str, podcast_name: Optional[str], limit: int):
+    """Background: download MP3 + VTT from a channel (no processing)."""
+    try:
+        downloads_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "downloads")
+        os.makedirs(downloads_dir, exist_ok=True)
+        
+        _jobs[job_id]["status"] = "listing_videos"
+        _jobs[job_id]["output_dir"] = downloads_dir
+        
+        # Get video list
+        cmd = [
+            "yt-dlp", "--flat-playlist", "--dump-json",
+            f"https://www.youtube.com/{channel}/videos",
+            "--playlist-end", str(limit)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        
+        videos = []
+        for line in result.stdout.strip().split('\n'):
+            if line:
+                try:
+                    data = json.loads(line)
+                    vid = {
+                        "id": data.get("id"),
+                        "title": data.get("title", "Unknown"),
+                        "url": f"https://www.youtube.com/watch?v={data['id']}",
+                        "duration": data.get("duration"),
+                    }
+                    # Skip short videos (< 5 min)
+                    if vid.get("duration") and vid["duration"] < 300:
+                        continue
+                    videos.append(vid)
+                except json.JSONDecodeError:
+                    continue
+        
+        if not videos:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = "No videos found"
+            return
+        
+        _jobs[job_id]["total_videos"] = len(videos)
+        _jobs[job_id]["status"] = "downloading"
+        _jobs[job_id]["videos"] = []
+        
+        name = podcast_name or channel.replace("@", "")
+        podcast_dir = os.path.join(downloads_dir, name)
+        os.makedirs(podcast_dir, exist_ok=True)
+        
+        success = 0
+        failed = 0
+        
+        for i, video in enumerate(videos):
+            vid_status = {
+                "id": video["id"],
+                "title": video["title"],
+                "status": "downloading",
+                "index": i + 1,
+            }
+            _jobs[job_id]["videos"].append(vid_status)
+            _jobs[job_id]["current_video"] = i + 1
+            
+            try:
+                video_id = video["id"]
+                url = video["url"]
+                
+                # Check if already downloaded
+                mp3_path = os.path.join(podcast_dir, f"{video_id}.mp3")
+                vtt_path = os.path.join(podcast_dir, f"{video_id}.en.vtt")
+                
+                if os.path.exists(mp3_path) and os.path.exists(vtt_path):
+                    vid_status["status"] = "skipped"
+                    vid_status["reason"] = "already downloaded"
+                    continue
+                
+                # Download MP3 + VTT
+                cmd = [
+                    "yt-dlp",
+                    "-x", "--audio-format", "mp3",
+                    "--write-auto-sub", "--write-sub",
+                    "--sub-lang", "en",
+                    "--sub-format", "vtt",
+                    "-o", os.path.join(podcast_dir, "%(id)s.%(ext)s"),
+                    url
+                ]
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+                
+                if result.returncode != 0:
+                    vid_status["status"] = "failed"
+                    vid_status["error"] = result.stderr[:100] if result.stderr else "Download failed"
+                    failed += 1
+                    continue
+                
+                # Check files exist
+                has_mp3 = os.path.exists(mp3_path)
+                has_vtt = any(Path(podcast_dir).glob(f"{video_id}*.vtt"))
+                
+                if has_mp3:
+                    vid_status["status"] = "complete"
+                    vid_status["mp3"] = True
+                    vid_status["vtt"] = has_vtt
+                    success += 1
+                else:
+                    vid_status["status"] = "failed"
+                    vid_status["error"] = "MP3 not created"
+                    failed += 1
+                
+                time.sleep(1)  # Rate limit
+                
+            except Exception as e:
+                vid_status["status"] = "failed"
+                vid_status["error"] = str(e)[:100]
+                failed += 1
+        
+        _jobs[job_id]["status"] = "complete"
+        _jobs[job_id]["success"] = success
+        _jobs[job_id]["failed"] = failed
+        _jobs[job_id]["output_dir"] = podcast_dir
+        _jobs[job_id]["completed_at"] = datetime.utcnow().isoformat()
+        
+    except Exception as e:
+        _jobs[job_id]["status"] = "failed"
+        _jobs[job_id]["error"] = str(e)[:300]
+
+
+@router.post("/download-only")
+async def download_only_channel(request: DownloadOnlyRequest, background_tasks: BackgroundTasks):
+    """
+    Download MP3 + VTT subtitles from a YouTube channel.
+    No processing - just downloads files for later upload/processing.
+    
+    Files saved to: app/downloads/{podcast_name}/
+    """
+    global _job_counter
+    _job_counter += 1
+    job_id = f"download_{_job_counter}_{int(time.time())}"
+    
+    _jobs[job_id] = {
+        "job_id": job_id,
+        "type": "download_only",
+        "channel": request.channel,
+        "limit": request.limit,
+        "status": "queued",
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    
+    background_tasks.add_task(
+        _download_only_channel, job_id, request.channel, request.podcast_name, request.limit
+    )
+    
+    return {"job_id": job_id, "status": "queued", "type": "download_only"}
+
+
+@router.get("/downloads")
+async def list_downloads():
+    """List all downloaded files (MP3 + VTT)."""
+    downloads_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "downloads")
+    if not os.path.exists(downloads_dir):
+        return {"podcasts": [], "path": downloads_dir}
+    
+    podcasts = []
+    for podcast_dir in Path(downloads_dir).iterdir():
+        if podcast_dir.is_dir():
+            mp3s = list(podcast_dir.glob("*.mp3"))
+            vtts = list(podcast_dir.glob("*.vtt"))
+            total_size = sum(f.stat().st_size for f in mp3s)
+            podcasts.append({
+                "name": podcast_dir.name,
+                "path": str(podcast_dir),
+                "mp3_count": len(mp3s),
+                "vtt_count": len(vtts),
+                "total_size_mb": round(total_size / 1024 / 1024, 1),
+            })
+    
+    return {
+        "podcasts": sorted(podcasts, key=lambda x: x["name"]),
+        "path": downloads_dir,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Pipeline V2 - WAV + MFA for accurate timestamps
 # ═══════════════════════════════════════════════════════════════════════════════
 

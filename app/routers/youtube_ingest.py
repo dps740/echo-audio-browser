@@ -49,6 +49,8 @@ class IngestChannelRequest(BaseModel):
     channel: str
     podcast_name: Optional[str] = None
     limit: int = 10
+    use_whisper: bool = False
+    whisper_model: str = "tiny"
 
 
 def _get_collection():

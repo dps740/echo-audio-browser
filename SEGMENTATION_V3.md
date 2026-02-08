@@ -1,5 +1,27 @@
 # Echo Segmentation V3 Design
 
+## ⚠️ STATUS: TIMESTAMP ACCURACY ISSUE (2026-02-08)
+
+**Problem Identified:** V3 uses YouTube VTT timestamps directly, which are inaccurate. Testing showed clips starting with wrong content (expected "chatbot" content at 51:50, but VTT timestamps placed it at 47:05 — a 5-minute error).
+
+**Root Cause:** YouTube auto-captions have unreliable word-level timing. The VTT `<c>` tag timestamps don't match actual audio positions.
+
+**Fix:** Use V2 pipeline with MFA (Montreal Forced Aligner) for accurate timestamps:
+1. Download audio + YouTube transcript (for text, not timing)
+2. Convert to WAV (16kHz mono)
+3. Run MFA alignment on WAV + transcript text → TextGrid with precise word timestamps
+4. Use MFA timestamps for clip extraction
+
+**Note:** There's also a separate UX issue — the search snippet shows the "best match" (highest score) which may be in the MIDDLE of a clip, not at the start. This is confusing but not a timestamp bug. Fix: show snippet from clip start.
+
+**Next Steps:**
+1. Get MFA working on existing audio files (not via yt-dlp download)
+2. Parse MFA TextGrid output for word timestamps
+3. Feed MFA timestamps into V3 sentence segmentation (replacing VTT timestamps)
+4. Fix snippet to show clip start content
+
+---
+
 ## Overview
 
 V3 replaces the LLM-based segmentation with a sentence-level embedding approach that achieves:
@@ -23,18 +45,20 @@ Instead of fixed-length segments, V3:
 ### Index-Time Pipeline
 
 ```
-Audio File
+Audio File (WAV) + YouTube Transcript (text only)
     ↓
-Whisper Transcription (word-level timestamps)
+MFA Forced Alignment → TextGrid with precise word timestamps
     ↓
 Sentence Segmentation (pause-based, 800ms threshold)
     ↓
 Embed Each Sentence (text-embedding-3-small)
     ↓
-Store: sentences + embeddings + timestamps
+Store: sentences + embeddings + MFA timestamps
 ```
 
-**No LLM segmentation. No fixed boundaries. Just sentences + embeddings.**
+**REVISED (2026-02-08):** Original plan used YouTube VTT timestamps directly. Testing showed these are inaccurate. Now using MFA alignment for precise timestamps.
+
+**No LLM segmentation. No fixed boundaries. Just sentences + embeddings + accurate MFA timing.**
 
 ### Search-Time Pipeline
 

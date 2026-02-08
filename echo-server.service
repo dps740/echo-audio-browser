@@ -6,6 +6,7 @@ After=network.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/clawd/projects/echo-audio-browser
+Environment="PATH=/home/ubuntu/miniconda3/envs/mfa/bin:/usr/local/bin:/usr/bin:/bin"
 ExecStart=/home/ubuntu/clawd/projects/echo-audio-browser/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765
 Restart=always
 RestartSec=5

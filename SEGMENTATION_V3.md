@@ -51,10 +51,17 @@ Sentence Segmentation (pause-based, 800ms threshold)
     ↓
 Embed Each Sentence (text-embedding-3-small)
     ↓
-Store: sentences + embeddings + timestamps
+Detect Topic Boundaries (embedding similarity drops)
+    ↓
+LLM Refinement (gpt-4o-mini):
+  - Find true topic start for each segment
+  - Generate SPECIFIC snippet (not vague summaries)
+    ↓
+Store: segments + embeddings + refined boundaries + snippets
 ```
 
-**No MFA. No Whisper. No LLM segmentation.** YouTube VTT timestamps are accurate when clips are extracted from WAV.
+**No MFA. No Whisper.** YouTube VTT timestamps are accurate when clips are extracted from WAV.
+**LLM used ONCE at index time** for boundary refinement and snippet generation (~$0.00015 per segment).
 
 ### Search-Time Pipeline
 

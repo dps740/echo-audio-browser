@@ -294,3 +294,181 @@ async def get_clip(video_id: str, start_ms: int, end_ms: int):
         }
     else:
         raise HTTPException(500, f"Failed to generate clip for {video_id}")
+
+
+# ============================================================================
+# LLM-REFINED SEGMENTATION (V3.1)
+# ============================================================================
+
+class RefinedSegmentResponse(BaseModel):
+    start_ms: int
+    end_ms: int
+    original_start_ms: int
+    duration_s: float
+    snippet: str  # LLM-generated specific summary
+    boundary_refined: bool  # Was the start moved?
+
+
+class RefinedSegmentationResult(BaseModel):
+    episode: str
+    total_sentences: int
+    total_segments: int
+    segments: List[RefinedSegmentResponse]
+    llm_model: str
+    cost_estimate: str
+
+
+@router.post("/segment-refined/{video_id}", response_model=RefinedSegmentationResult)
+async def segment_episode_refined(video_id: str, similarity_threshold: float = 0.5):
+    """
+    Run V3 segmentation with LLM refinement.
+    
+    This is the full pipeline:
+    1. Parse VTT → sentences with timestamps
+    2. Embed sentences
+    3. Detect topic boundaries (embedding similarity drops)
+    4. LLM refines each boundary (finds true topic start)
+    5. LLM generates specific snippet for each segment
+    
+    Run this ONCE per episode at index time. Results are cached.
+    
+    Example: POST /v3/segment-refined/gXY1kx7zlkk
+    """
+    from app.services.segment_refiner import (
+        detect_topic_boundaries,
+        refine_segments
+    )
+    
+    # Find VTT file
+    vtt_path = Path(f"audio/{video_id}.en.vtt")
+    if not vtt_path.exists():
+        raise HTTPException(404, f"VTT file not found: {vtt_path}")
+    
+    vtt_content = vtt_path.read_text()
+    
+    # Step 1-2: Parse VTT and embed sentences
+    segments, sentences = segment_transcript_v3(vtt_content)
+    
+    if not sentences:
+        raise HTTPException(400, "No sentences extracted from VTT")
+    
+    # Step 3: Detect topic boundaries
+    initial_boundaries = detect_topic_boundaries(
+        sentences, 
+        similarity_threshold=similarity_threshold
+    )
+    
+    print(f"Found {len(initial_boundaries)} initial segments")
+    
+    # Step 4-5: LLM refinement
+    refined = refine_segments(sentences, initial_boundaries, model="gpt-4o-mini")
+    
+    # Cache refined segments
+    _cache[video_id] = {
+        'segments': segments,
+        'sentences': sentences,
+        'refined_segments': refined
+    }
+    
+    # Calculate cost estimate
+    # ~700 tokens input + 50 output per segment, gpt-4o-mini pricing
+    cost_per_segment = 0.00015
+    total_cost = len(refined) * cost_per_segment
+    
+    return RefinedSegmentationResult(
+        episode=video_id,
+        total_sentences=len(sentences),
+        total_segments=len(refined),
+        segments=[
+            RefinedSegmentResponse(
+                start_ms=s.start_ms,
+                end_ms=s.end_ms,
+                original_start_ms=s.original_start_ms,
+                duration_s=round((s.end_ms - s.start_ms) / 1000, 1),
+                snippet=s.snippet,
+                boundary_refined=(s.start_ms != s.original_start_ms)
+            )
+            for s in refined
+        ],
+        llm_model="gpt-4o-mini",
+        cost_estimate=f"${total_cost:.4f}"
+    )
+
+
+@router.get("/search-refined/{video_id}")
+async def search_refined(video_id: str, q: str, top_k: int = 5):
+    """
+    Search using LLM-refined segments.
+    
+    Uses pre-computed snippets - no LLM calls at search time.
+    
+    Example: GET /v3/search-refined/gXY1kx7zlkk?q=AI
+    """
+    if video_id not in _cache:
+        raise HTTPException(400, f"Episode not segmented yet. POST /v3/segment-refined/{video_id} first")
+    
+    data = _cache[video_id]
+    
+    if 'refined_segments' not in data:
+        raise HTTPException(400, f"Episode not refined yet. POST /v3/segment-refined/{video_id} first")
+    
+    refined = data['refined_segments']
+    sentences = data['sentences']
+    
+    # Search within refined segments
+    from app.services.search_v3 import get_query_embedding
+    import numpy as np
+    
+    query_emb = get_query_embedding(q)
+    query_norm = query_emb / np.linalg.norm(query_emb)
+    
+    # Score each segment by best matching sentence
+    scored_segments = []
+    for seg in refined:
+        best_score = 0
+        for idx in seg.sentence_indices:
+            sent = sentences[idx]
+            if sent.embedding is not None:
+                sent_norm = sent.embedding / np.linalg.norm(sent.embedding)
+                score = float(np.dot(query_norm, sent_norm))
+                best_score = max(best_score, score)
+        scored_segments.append((seg, best_score))
+    
+    # Sort by score, return top_k
+    scored_segments.sort(key=lambda x: -x[1])
+    top_segments = scored_segments[:top_k]
+    
+    # Generate clip URLs
+    from app.services.clip_extractor import get_clip_url
+    
+    def format_time(ms: int) -> str:
+        total_seconds = ms // 1000
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        return f"{minutes}:{seconds:02d}"
+    
+    results = []
+    for seg, score in top_segments:
+        if score < 0.3:  # Skip low-relevance results
+            continue
+        
+        clip_url = get_clip_url(video_id, seg.start_ms, seg.end_ms)
+        
+        results.append({
+            "start_ms": seg.start_ms,
+            "end_ms": seg.end_ms,
+            "start_formatted": format_time(seg.start_ms),
+            "end_formatted": format_time(seg.end_ms),
+            "duration_s": round((seg.end_ms - seg.start_ms) / 1000, 1),
+            "score": round(score, 3),
+            "snippet": seg.snippet,  # LLM-generated specific summary
+            "clip_url": clip_url,
+            "boundary_refined": seg.start_ms != seg.original_start_ms
+        })
+    
+    return {
+        "query": q,
+        "results": results,
+        "total_segments": len(refined),
+        "matches_found": len(results)
+    }

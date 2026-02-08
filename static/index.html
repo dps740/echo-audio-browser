@@ -886,18 +886,16 @@
         startBtn.disabled = true;
         startBtn.textContent = '⏳ Starting batch...';
         
-        // Start each channel ingestion
+        // Start each channel ingestion (using v1 pipeline - YouTube captions, no MFA needed)
         for (const item of batchQueue) {
             try {
-                await api('/ingest/youtube/v2/channel', {
+                await api('/ingest/youtube/channel', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         channel: item.channel,
                         podcast_name: item.name,
-                        limit: item.limit,
-                        use_whisper: document.getElementById('force-whisper')?.checked || false,
-                        whisper_model: document.getElementById('whisper-model')?.value || 'tiny'
+                        limit: item.limit
                     })
                 });
             } catch (e) {

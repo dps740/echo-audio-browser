@@ -422,12 +422,29 @@ async def search_refined(video_id: str, q: str, top_k: int = 5):
     query_emb = get_query_embedding(q)
     query_norm = query_emb / np.linalg.norm(query_emb)
     
-    # Score each segment by match count AND best score
-    # Requires multiple strong matches, not just one passing mention
+    # Score each segment by OVERALL semantic relevance, not just keyword matches
+    # This filters out segments where the query term is just a passing mention
     scored_segments = []
-    MATCH_THRESHOLD = 0.35  # Minimum score for a sentence to count as a match
     
     for seg in refined:
+        # Calculate segment's average embedding (what is this segment about?)
+        seg_embeddings = []
+        for idx in seg.sentence_indices:
+            sent = sentences[idx]
+            if sent.embedding is not None:
+                seg_embeddings.append(sent.embedding)
+        
+        if not seg_embeddings:
+            continue
+        
+        # Average embedding represents the segment's overall topic
+        avg_embedding = np.mean(seg_embeddings, axis=0)
+        avg_norm = avg_embedding / np.linalg.norm(avg_embedding)
+        
+        # How related is the segment's overall topic to the query?
+        segment_relevance = float(np.dot(query_norm, avg_norm))
+        
+        # Also get best individual sentence match
         best_score = 0
         match_count = 0
         for idx in seg.sentence_indices:
@@ -436,18 +453,17 @@ async def search_refined(video_id: str, q: str, top_k: int = 5):
                 sent_norm = sent.embedding / np.linalg.norm(sent.embedding)
                 score = float(np.dot(query_norm, sent_norm))
                 best_score = max(best_score, score)
-                if score >= MATCH_THRESHOLD:
+                if score >= 0.35:
                     match_count += 1
         
-        # Combined score: best match + density bonus
-        # Segments with multiple matches rank higher
-        density_bonus = min(match_count / 5, 0.3)  # Up to 0.3 bonus for 5+ matches
-        combined_score = best_score + density_bonus
+        # Combined score: segment relevance (60%) + best match (40%)
+        # This prioritizes segments where the TOPIC is related, not just keyword hits
+        combined_score = 0.6 * segment_relevance + 0.4 * best_score
         
-        # Require at least 2 sentence matches to avoid passing mentions
-        # Single mentions even with high score are often not the main topic
-        if match_count >= 2:
-            scored_segments.append((seg, combined_score, match_count))
+        # Only include if segment is genuinely about the topic (relevance > 0.4)
+        # OR has strong specific matches (best_score > 0.5 AND match_count >= 2)
+        if segment_relevance > 0.40 or (best_score > 0.5 and match_count >= 2):
+            scored_segments.append((seg, combined_score, match_count, segment_relevance))
     
     # Sort by combined score, return top_k
     scored_segments.sort(key=lambda x: -x[1])
@@ -463,7 +479,7 @@ async def search_refined(video_id: str, q: str, top_k: int = 5):
         return f"{minutes}:{seconds:02d}"
     
     results = []
-    for seg, score, match_count in top_segments:
+    for seg, score, match_count, relevance in top_segments:
         clip_url = get_clip_url(video_id, seg.start_ms, seg.end_ms)
         
         results.append({
@@ -473,7 +489,8 @@ async def search_refined(video_id: str, q: str, top_k: int = 5):
             "end_formatted": format_time(seg.end_ms),
             "duration_s": round((seg.end_ms - seg.start_ms) / 1000, 1),
             "score": round(score, 3),
-            "match_count": match_count,  # How many sentences matched
+            "relevance": round(relevance, 3),  # How related is segment's topic to query
+            "match_count": match_count,
             "snippet": seg.snippet,
             "clip_url": clip_url,
             "boundary_refined": seg.start_ms != seg.original_start_ms

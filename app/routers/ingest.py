@@ -30,8 +30,8 @@ async def ingest_episode(request: IngestRequest):
     Chunks into ~60 sec segments and stores in ChromaDB.
     """
     try:
-        client = chromadb.PersistentClient(path="./chroma_data")
-        collection = client.get_or_create_collection("segments")
+        from app.services.vectordb import get_collection
+        collection = get_collection()
         
         # Group transcript segments into ~60 sec chunks
         chunks = []

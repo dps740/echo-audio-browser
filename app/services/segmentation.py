@@ -202,7 +202,14 @@ Return JSON array:
   }}
 ]
 
-REMEMBER: starts_with and ends_with must capture the FULL topic discussion, typically 1-3 minutes of audio. If your segment would be less than 30 seconds, you probably picked quotes that are too close together!
+CRITICAL DURATION REQUIREMENTS:
+- MINIMUM segment length: 60 seconds (1 minute)
+- IDEAL segment length: 1-3 minutes
+- If a topic is discussed for less than 60 seconds, COMBINE it with the previous or next segment
+- starts_with and ends_with quotes must be FAR APART (60+ seconds of content between them)
+- A listener needs enough context to understand the topic - 30 seconds is NOT enough!
+
+If your segment would be less than 60 seconds, you picked quotes that are too close together. GO WIDER.
 
 BAD TAGS: "AI", "technology", "business", "interview", "discussion"
 GOOD TAGS: "GPT-4 capabilities demo", "hotel cleanliness standards", "Y Combinator interview tips"
@@ -717,7 +724,10 @@ def _parse_segments(segments_json: List[Dict], transcript: TranscriptResult) -> 
                         "duration_sec": (end_ms - start_ms) / 1000,
                         "error": msg
                     })
-                    # Still include it but flag it
+                    # SKIP segments that are too short - not enough context
+                    if "Too short" in msg:
+                        print(f"[DEBUG] SKIPPING segment {i}: too short for meaningful context")
+                        continue
             else:
                 # Fall back to direct timestamps (old format / backward compat)
                 start_ms = seg.get("start_ms", 0)

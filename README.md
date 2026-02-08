@@ -1,93 +1,86 @@
 # Echo - Topic-First Audio Browser
 
-**Status:** MVP Testing  
-Browse podcasts by **topic**, not episode. Search "AI safety" and get a playlist of relevant segments from across your library.
+**Status:** V3 Pipeline Complete  
+Browse podcasts by **topic**, not episode. Search "AI safety" and get clips of relevant segments from across your library.
 
-## Quick Start (Windows)
+## Architecture (V3)
+
+```
+YouTube Video
+    ↓
+Download: Audio + VTT transcript (yt-dlp)
+    ↓
+Convert to WAV (ffmpeg, 16kHz mono)
+    ↓
+Parse VTT → word-level timestamps
+    ↓
+Sentence segmentation (800ms pause threshold)
+    ↓
+Embed sentences (text-embedding-3-small)
+    ↓
+Detect topic boundaries (embedding similarity)
+    ↓
+LLM refinement (gpt-4o-mini):
+  - Find true topic start
+  - Generate SPECIFIC snippet
+    ↓
+Store segments + serve MP3 clips
+```
+
+**Key insight:** YouTube VTT timestamps are accurate when clips extracted from WAV. No MFA/Whisper needed.
+
+## Quick Start
 
 ```bash
 # 1. Clone and setup
 git clone https://github.com/dps740/echo-audio-browser
 cd echo-audio-browser
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
 # 2. Configure
 cp .env.example .env
-# Edit .env - add your OPENAI_API_KEY
+# Edit .env - add OPENAI_API_KEY
 
 # 3. Run
-start_server.bat
-# Or: python -m uvicorn app.main:app --port 8765
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8765
 
-# 4. Open browser
-http://localhost:8765/player
+# 4. Index an episode
+curl -X POST "http://localhost:8765/v3/segment-refined/VIDEO_ID"
+
+# 5. Search
+curl "http://localhost:8765/v3/search-refined/VIDEO_ID?q=AI"
 ```
 
-## Environment Variables
-
-```bash
-# Required
-OPENAI_API_KEY=sk-...          # For segmentation + embeddings
-
-# Optional (defaults work fine)
-EMBEDDING_MODEL=text-embedding-3-small
-SEGMENTATION_MODEL=gpt-4o-mini
-USE_OPENAI_EMBEDDINGS=true
-CHROMA_PERSIST_DIR=./chroma_data
-```
-
-## Project Structure
-
-```
-echo-audio-browser/
-├── app/                    # FastAPI server
-│   ├── main.py            # App entry point
-│   ├── config.py          # Settings
-│   ├── routers/           # API endpoints
-│   │   ├── youtube_ingest.py   # Ingest, re-analyze, repair
-│   │   ├── library.py     # Browse podcasts/episodes
-│   │   └── playlists.py   # Search → playlist
-│   └── services/          # Business logic
-│       ├── segmentation.py     # LLM segmentation
-│       ├── hybrid_search.py    # Semantic + keyword search
-│       └── vectordb.py         # ChromaDB operations
-├── static/
-│   └── index.html         # Web UI (Dashboard, Library, Ingest, Player)
-├── scripts/               # Utility scripts
-│   ├── echo_ingest.py     # CLI batch ingest
-│   └── ingest.bat         # Windows batch wrapper
-├── chroma_data/           # Vector DB storage (gitignored)
-├── start_server.bat       # Windows launcher
-├── ECHO_PROJECT.md        # Detailed architecture docs
-└── requirements.txt
-```
-
-## Features
-
-- **YouTube ingestion** - Paste URL or select from curated podcasts
-- **LLM segmentation** - GPT-4o-mini identifies topic boundaries (2-10 min segments)
-- **Hybrid search** - Semantic + keyword matching
-- **Audio player** - Stream with seek, crossfade between segments
-- **Re-analyze** - Re-run full pipeline on existing content
-
-## API Endpoints
+## API Endpoints (V3)
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /player` | Web UI |
-| `GET /library/overview` | Dashboard stats |
-| `GET /playlists/topic/{topic}` | Search → playlist |
-| `POST /ingest/youtube/url` | Ingest single video |
-| `POST /ingest/youtube/deep-reindex` | Re-run LLM segmentation |
-| `POST /ingest/youtube/repair` | Fix corrupted collections |
+| `POST /v3/segment-refined/{video_id}` | Index episode with LLM refinement |
+| `GET /v3/search-refined/{video_id}?q=` | Search with pre-computed snippets |
+| `GET /v3/clip/{video_id}?start_ms=&end_ms=` | Generate MP3 clip |
 
 ## Cost
 
-~$0.03-0.05 per episode (GPT-4o-mini segmentation + embeddings)
+- **Indexing:** ~$0.02 per episode (embeddings + LLM refinement)
+- **Search:** Free (uses pre-computed data)
 
-## Docs
+## Files
 
-See `ECHO_PROJECT.md` for full architecture, pipeline details, and troubleshooting.
+| File | Purpose |
+|------|---------|
+| `SEGMENTATION_V3.md` | Current pipeline docs |
+| `app/services/segmentation_v3.py` | VTT parsing, sentence segmentation |
+| `app/services/segment_refiner.py` | LLM boundary + snippet generation |
+| `app/services/search_v3.py` | Cluster-based search |
+| `app/services/clip_extractor.py` | WAV → MP3 clip extraction |
+| `app/routers/test_v3.py` | V3 API endpoints |
+
+## Pre-segmenting (Before API)
+
+1. Download audio + VTT: `yt-dlp -x --write-auto-sub URL`
+2. Convert to WAV: `ffmpeg -i input.mp3 -ar 16000 -ac 1 output.wav`
+3. Place in `audio/` folder
 
 ## License
 

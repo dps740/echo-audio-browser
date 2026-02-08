@@ -891,6 +891,7 @@
             try {
                 await api('/ingest/youtube/v2/channel', {
                     method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         channel: item.channel,
                         podcast_name: item.name,
@@ -1219,6 +1220,35 @@
         if (j.segments_created) details += `<div style="font-size:12px;color:var(--success);margin-top:2px;">✓ ${j.segments_created} segments created</div>`;
         if (j.error) details += `<div style="font-size:13px;color:var(--danger);margin-top:4px;">${esc(j.error)}</div>`;
         
+        // Channel v2 progress stats
+        let channelProgressHtml = '';
+        if (j.type === 'channel_v2' && j.total_videos) {
+            const done = j.current_video || 0;
+            const pct = j.total_videos > 0 ? Math.round((done / j.total_videos) * 100) : 0;
+            channelProgressHtml = `
+                <div class="job-progress" style="margin-top:8px;">
+                    <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--text-secondary);margin-bottom:4px;">
+                        <span>${done} / ${j.total_videos} videos</span>
+                        <span>✅ ${j.success || 0} · ⏭️ ${j.skipped || 0} · ❌ ${j.failed || 0}</span>
+                    </div>
+                    <div class="job-progress-bar"><div class="job-progress-fill" style="width:${pct}%"></div></div>
+                </div>
+            `;
+            // Show last few videos being processed
+            if (j.videos && j.videos.length) {
+                const recentVideos = j.videos.slice(-5).reverse();
+                channelProgressHtml += `<div style="margin-top:8px;font-size:12px;">`;
+                for (const v of recentVideos) {
+                    const vIcon = v.status === 'complete' ? '✅' : v.status === 'skipped' ? '⏭️' : v.status === 'failed' ? '❌' : '🔄';
+                    channelProgressHtml += `<div style="display:flex;gap:6px;padding:2px 0;color:var(--text-muted);">
+                        <span>${vIcon}</span>
+                        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(v.title || v.id)}</span>
+                    </div>`;
+                }
+                channelProgressHtml += `</div>`;
+            }
+        }
+        
         return `
             <div class="job-card" style="border-color: ${j.status === 'running' ? 'var(--accent)' : 'var(--border)'};">
                 <div class="job-header">
@@ -1226,6 +1256,7 @@
                     <span class="list-item-badge ${statusBadge}">${statusLabel}</span>
                 </div>
                 ${details}
+                ${channelProgressHtml}
                 ${progressHtml}
                 ${stepsHtml}
             </div>

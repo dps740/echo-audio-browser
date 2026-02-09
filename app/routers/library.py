@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from collections import defaultdict
 
 from app.services import storage
+from app.services.clip_extractor import get_clip_url
 
 router = APIRouter(prefix="/library", tags=["library"])
 
@@ -102,6 +103,15 @@ async def get_episode_segments(episode_id: str):
 
     if not segments:
         raise HTTPException(404, f"No segments found for episode: {episode_id}")
+
+    # Add clip URLs so frontend can play segments
+    for seg in segments:
+        clip_url = get_clip_url(
+            seg.get("video_id", episode_id),
+            seg.get("start_ms", 0),
+            seg.get("end_ms", 0),
+        )
+        seg["clip_url"] = clip_url or f"/audio/{episode_id}.mp3"
 
     return {
         "episode_id": episode_id,

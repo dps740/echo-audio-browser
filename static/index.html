@@ -667,24 +667,13 @@
             `;
             document.getElementById('library-title').textContent = data.episode_title;
 
-            el.innerHTML = `
-                <p style="margin-bottom:16px;color:var(--text-secondary)">${data.segment_count} segments · Click to play</p>
-                ${data.segments.map((s, i) => `
-                    <div class="segment-card" onclick="playLibrarySegments(${JSON.stringify(data.segments).split("'").join("\\'")}', ${i})">
-                        <div class="seg-meta">${fmt(s.start_ms)} → ${fmt(s.end_ms)} · ${fmtDuration(s.end_ms - s.start_ms)}</div>
-                        <div class="seg-text">${esc(s.text.substring(0, 250))}${s.text.length > 250 ? '...' : ''}</div>
-                    </div>
-                `).join('')}
-            `;
-
-            // Fix: store segments globally and use index
             window._libSegments = data.segments;
             el.innerHTML = `
                 <p style="margin-bottom:16px;color:var(--text-secondary)">${data.segment_count} segments · Click any to play</p>
                 ${data.segments.map((s, i) => `
                     <div class="segment-card" onclick="playLibrarySegment(${i})">
                         <div class="seg-meta">${fmt(s.start_ms)} → ${fmt(s.end_ms)} · ${fmtDuration(s.end_ms - s.start_ms)}</div>
-                        <div class="seg-text">${esc(s.text.substring(0, 300))}${s.text.length > 300 ? '...' : ''}</div>
+                        <div class="seg-text">${esc(s.snippet || '')}</div>
                     </div>
                 `).join('')}
             `;
@@ -701,13 +690,13 @@
             title: 'Episode Playback',
             segments: segs.map(s => ({
                 segment_id: s.segment_id,
-                source_url: s.audio_url,
+                source_url: s.clip_url,
                 start_time_ms: s.start_ms,
                 end_time_ms: s.end_ms,
-                preroll_text: s.summary || s.text.substring(0, 150),
+                preroll_text: s.snippet || '',
                 topic_tags: [],
-                podcast_title: s.podcast_title,
-                episode_title: s.episode_title,
+                podcast_title: s.podcast_name || s.episode_title || '',
+                episode_title: s.episode_title || '',
             }))
         };
         playSegment(index);

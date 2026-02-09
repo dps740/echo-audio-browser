@@ -401,37 +401,13 @@
 
     <!-- ═══════════════════ INGEST ═══════════════════ -->
     <div id="page-ingest" class="page">
-        <h1 class="page-title">Ingest Content</h1>
-
-        <!-- Pipeline Status Banner -->
-        <div class="card" id="pipeline-status" style="display:none; border-color: var(--warning);">
-            <div style="display:flex; align-items:center; gap:10px;">
-                <span style="font-size:20px;">⚠️</span>
-                <div>
-                    <div style="font-weight:600;">Pipeline V2 Not Ready</div>
-                    <div id="pipeline-status-details" style="font-size:13px; color:var(--text-secondary);"></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Single URL -->
-        <div class="card">
-            <div class="card-title">Add YouTube Video</div>
-            <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px;">
-                Full pipeline: Download → WAV → MFA Alignment → LLM Segmentation → Index
-            </p>
-            <div class="input-row">
-                <input type="text" id="ingest-url" placeholder="https://www.youtube.com/watch?v=...">
-                <input type="text" id="ingest-podcast-name" placeholder="Podcast name (optional)" style="max-width: 220px;">
-                <button class="btn btn-primary" onclick="ingestURLv2()">▶ Ingest</button>
-            </div>
-        </div>
+        <h1 class="page-title">Download Podcasts</h1>
 
         <!-- Channel batch -->
         <div class="card">
             <div class="card-title">Select Podcasts</div>
             <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px;">
-                Click podcasts to add them to your batch queue.
+                Click podcasts to add them to your download queue. Downloads MP3 + VTT subtitles.
             </p>
             <div class="podcast-grid" id="curated-podcasts"></div>
             <div style="margin-top: 16px;">
@@ -455,39 +431,11 @@
                 </div>
             </div>
             <div style="display: flex; gap: 12px; margin-top: 12px; align-items: center;">
-                <select id="batch-mode" style="padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-secondary);">
-                    <option value="download-only">📥 Download Only (MP3 + VTT)</option>
-                    <option value="full-pipeline">⚙️ Full Pipeline (Download + Index)</option>
-                </select>
-                <button class="btn btn-primary" onclick="startBatch()" id="start-batch-btn" disabled>▶ Start Batch</button>
+                <button class="btn btn-primary" onclick="startBatch()" id="start-batch-btn" disabled>▶ Start Download</button>
                 <button class="btn" onclick="clearQueue()">Clear Queue</button>
             </div>
-            <div id="mode-info" style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">
-                📥 Downloads MP3 + subtitles only. Upload to Drive for server processing.
-            </div>
-        </div>
-
-        <!-- Transcript Options -->
-        <div class="card">
-            <div class="card-title">Transcript Options</div>
-            <div style="display:flex; flex-direction:column; gap:12px;">
-                <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-                    <input type="checkbox" id="force-whisper" style="width:18px; height:18px;">
-                    <span>Force Whisper transcription (skip YouTube captions)</span>
-                </label>
-                <div style="display:flex; align-items:center; gap:12px;">
-                    <span style="font-size:14px; color:var(--text-secondary);">Whisper model (if needed):</span>
-                    <select id="whisper-model" style="max-width: 140px;">
-                        <option value="tiny" selected>tiny (fastest)</option>
-                        <option value="base">base</option>
-                        <option value="small">small</option>
-                        <option value="medium">medium</option>
-                        <option value="large">large (best)</option>
-                    </select>
-                </div>
-                <p style="font-size: 12px; color: var(--text-muted);">
-                    💡 Default: Try YouTube captions first, fall back to Whisper if unavailable.
-                </p>
+            <div style="margin-top: 8px; font-size: 12px; color: var(--text-muted);">
+                Downloads MP3 + VTT subtitles for later indexing on the server.
             </div>
         </div>
 
@@ -501,27 +449,6 @@
             </div>
         </div>
 
-        <!-- Legacy Options (collapsed) -->
-        <details style="margin-top:16px;">
-            <summary style="cursor:pointer; color:var(--text-muted); font-size:14px;">Legacy Options (v1 pipeline)</summary>
-            <div class="card" style="margin-top:12px;">
-                <div class="card-title">Scan Local Audio (v1)</div>
-                <p style="font-size: 14px; color: var(--text-secondary); margin-bottom: 12px;">
-                    Re-process existing audio files using v1 pipeline.
-                </p>
-                <div style="display: flex; align-items: center; gap: 12px;">
-                    <button class="btn btn-secondary" onclick="scanLocalAudio()" id="scan-local-btn">📂 Scan Local Files</button>
-                    <span id="scan-local-status" style="font-size: 13px; color: var(--text-muted);"></span>
-                </div>
-            </div>
-            <div class="card" style="margin-top:12px;">
-                <div class="card-title">Re-analyze Library (v1)</div>
-                <div style="display: flex; align-items: center; gap: 12px;">
-                    <button class="btn btn-secondary" onclick="deepReanalyzeLibrary()" id="deep-reanalyze-btn">🧠 Re-analyze All</button>
-                    <span id="reanalyze-status" style="font-size: 13px; color: var(--text-muted);"></span>
-                </div>
-            </div>
-        </details>
     </div>
 
     <!-- ═══════════════════ PLAYER ═══════════════════ -->
@@ -798,9 +725,6 @@
 
     // ═══════════════════ INGEST ═══════════════════
     async function loadIngestPage() {
-        // Check pipeline status
-        checkPipelineStatus();
-        
         // Load curated podcasts
         try {
             const data = await api('/ingest/youtube/podcasts');
@@ -888,473 +812,76 @@
 
     async function startBatch() {
         if (batchQueue.length === 0) return;
-        
+
         const startBtn = document.getElementById('start-batch-btn');
-        const mode = document.getElementById('batch-mode').value;
         startBtn.disabled = true;
-        startBtn.textContent = '⏳ Starting batch...';
-        
-        // Choose endpoint based on mode
-        const endpoint = mode === 'download-only' 
-            ? '/ingest/youtube/download-only'
-            : '/ingest/youtube/v2/channel';
-        
-        // Start each channel ingestion
+        startBtn.textContent = '⏳ Starting...';
+
         for (const item of batchQueue) {
             try {
-                const body = mode === 'download-only'
-                    ? { channel: item.channel, podcast_name: item.name, limit: item.limit }
-                    : {
-                        channel: item.channel,
-                        podcast_name: item.name,
-                        limit: item.limit,
-                        use_whisper: document.getElementById('force-whisper')?.checked || false,
-                        whisper_model: document.getElementById('whisper-model')?.value || 'tiny'
-                    };
-                
-                await api(endpoint, {
+                await api('/ingest/youtube/download-only', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
+                    body: JSON.stringify({
+                        channel: item.channel,
+                        podcast_name: item.name,
+                        limit: item.limit
+                    })
                 });
             } catch (e) {
                 console.error('Failed to start:', item.channel, e);
             }
         }
-        
-        // Clear queue and refresh
+
         batchQueue.length = 0;
         renderQueue();
-        startBtn.textContent = '▶ Start Batch';
+        startBtn.textContent = '▶ Start Download';
         refreshJobs();
-    }
-    
-    // Update mode info text when selection changes
-    document.addEventListener('DOMContentLoaded', () => {
-        const modeSelect = document.getElementById('batch-mode');
-        const modeInfo = document.getElementById('mode-info');
-        if (modeSelect && modeInfo) {
-            modeSelect.addEventListener('change', () => {
-                if (modeSelect.value === 'download-only') {
-                    modeInfo.textContent = '📥 Downloads MP3 + subtitles only. Upload to Drive for server processing.';
-                } else {
-                    modeInfo.textContent = '⚙️ Downloads and indexes to ChromaDB. Requires MFA for accurate timestamps.';
-                }
-            });
-        }
-    });
-
-    async function reanalyzeLibrary() {
-        const btn = document.getElementById('reanalyze-btn');
-        const status = document.getElementById('reanalyze-status');
-        btn.disabled = true;
-        btn.textContent = '⏳ Starting...';
-        status.textContent = '';
-
-        try {
-            const r = await api('/ingest/youtube/reindex', {
-                method: 'POST',
-            });
-            status.textContent = 'Re-analysis started! Check jobs below for progress.';
-            status.style.color = 'var(--success)';
-            btn.textContent = '✅ Started';
-            refreshJobs();
-            // Re-enable after a moment
-            setTimeout(() => {
-                btn.disabled = false;
-                btn.textContent = '🔄 Re-analyze All';
-            }, 5000);
-        } catch (e) {
-            status.textContent = 'Failed: ' + e.message;
-            status.style.color = '#f87171';
-            btn.disabled = false;
-            btn.textContent = '🔄 Re-analyze All';
-        }
-    }
-
-    async function scanLocalAudio() {
-        const btn = document.getElementById('scan-local-btn');
-        const status = document.getElementById('scan-local-status');
-        
-        btn.disabled = true;
-        btn.textContent = '⏳ Scanning...';
-        status.textContent = '';
-
-        try {
-            const r = await api('/ingest/youtube/scan-local', { method: 'POST' });
-            status.textContent = `Found ${r.files?.length || 0} files. Processing...`;
-            status.style.color = 'var(--success)';
-            btn.textContent = '✅ Started';
-            refreshJobs();
-            setTimeout(() => {
-                btn.disabled = false;
-                btn.textContent = '📂 Scan Local Files';
-            }, 5000);
-        } catch (e) {
-            status.textContent = 'Failed: ' + e.message;
-            status.style.color = '#f87171';
-            btn.disabled = false;
-            btn.textContent = '📂 Scan Local Files';
-        }
-    }
-
-    async function deepReanalyzeLibrary() {
-        const btn = document.getElementById('deep-reanalyze-btn');
-        const status = document.getElementById('reanalyze-status');
-        
-        if (!confirm('Deep re-analyze will re-run LLM segmentation on ALL content. This creates new clip boundaries and uses OpenAI API credits. Continue?')) return;
-        
-        btn.disabled = true;
-        btn.textContent = '⏳ Starting...';
-        status.textContent = '';
-
-        try {
-            const r = await api('/ingest/youtube/deep-reindex', { method: 'POST' });
-            status.textContent = 'Deep re-analysis started! Check jobs below for progress.';
-            status.style.color = 'var(--success)';
-            btn.textContent = '✅ Started';
-            refreshJobs();
-            setTimeout(() => {
-                btn.disabled = false;
-                btn.textContent = '🧠 Deep Re-analyze';
-            }, 5000);
-        } catch (e) {
-            status.textContent = 'Failed: ' + e.message;
-            status.style.color = '#f87171';
-            btn.disabled = false;
-            btn.textContent = '🧠 Deep Re-analyze';
-        }
-    }
-
-    // ═══════════════════ V2 PIPELINE FUNCTIONS ═══════════════════
-    
-    async function checkPipelineStatus() {
-        try {
-            const data = await api('/ingest/youtube/v2/status');
-            const el = document.getElementById('pipeline-status');
-            const details = document.getElementById('pipeline-status-details');
-            
-            if (!data.v2_ready) {
-                el.style.display = 'block';
-                const missing = [];
-                if (!data.dependencies.ffmpeg) missing.push('ffmpeg');
-                if (!data.dependencies.mfa) missing.push('MFA');
-                if (!data.dependencies.mfa_dictionary) missing.push('MFA dictionary');
-                if (!data.dependencies.mfa_acoustic_model) missing.push('MFA acoustic model');
-                details.textContent = 'Missing: ' + missing.join(', ');
-            } else {
-                el.style.display = 'none';
-            }
-        } catch (e) {
-            console.log('Pipeline status check failed (v2 endpoints may not be available yet)');
-        }
-    }
-    
-    async function ingestURLv2() {
-        const url = document.getElementById('ingest-url').value.trim();
-        if (!url) return;
-        const name = document.getElementById('ingest-podcast-name').value.trim() || undefined;
-        const use_whisper = document.getElementById('force-whisper').checked;
-        const whisper_model = document.getElementById('whisper-model').value;
-
-        try {
-            const r = await api('/ingest/youtube/v2/url', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url, podcast_name: name, use_whisper, whisper_model }),
-            });
-            document.getElementById('ingest-url').value = '';
-            refreshJobs();
-        } catch (e) {
-            alert('Failed to start ingestion: ' + e.message);
-        }
-    }
-
-    async function ingestChannelV2() {
-        const channel = document.getElementById('ingest-channel').value.trim();
-        if (!channel) return;
-        const limit = parseInt(document.getElementById('ingest-limit').value) || 10;
-        const name = document.getElementById('ingest-podcast-name').value.trim() || undefined;
-        const use_whisper = document.getElementById('force-whisper').checked;
-        const whisper_model = document.getElementById('whisper-model').value;
-
-        try {
-            await api('/ingest/youtube/v2/channel', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel, podcast_name: name, limit, use_whisper, whisper_model }),
-            });
-            document.getElementById('ingest-channel').value = '';
-            refreshJobs();
-        } catch (e) {
-            alert('Failed to start channel ingestion: ' + e.message);
-        }
-    }
-
-    // Legacy v1 functions (kept for backwards compatibility)
-    async function ingestURL() {
-        const url = document.getElementById('ingest-url').value.trim();
-        if (!url) return;
-        const name = document.getElementById('ingest-podcast-name').value.trim() || undefined;
-
-        try {
-            const r = await api('/ingest/youtube/url', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url, podcast_name: name }),
-            });
-            document.getElementById('ingest-url').value = '';
-            refreshJobs();
-        } catch (e) {
-            alert('Failed to start ingestion: ' + e.message);
-        }
-    }
-
-    async function ingestChannel() {
-        const channel = document.getElementById('ingest-channel').value.trim();
-        if (!channel) return;
-        const limit = parseInt(document.getElementById('ingest-limit').value) || 10;
-        const name = document.getElementById('ingest-podcast-name').value.trim() || undefined;
-
-        try {
-            await api('/ingest/youtube/channel', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel, podcast_name: name, limit }),
-            });
-            document.getElementById('ingest-channel').value = '';
-            refreshJobs();
-        } catch (e) {
-            alert('Failed to start channel ingestion: ' + e.message);
-        }
-    }
-
-    async function downloadTranscribeChannel() {
-        const channel = document.getElementById('ingest-channel').value.trim();
-        if (!channel) {
-            alert('Enter a channel handle (e.g., @lexfridman)');
-            return;
-        }
-        const limit = parseInt(document.getElementById('ingest-limit').value) || 10;
-        const name = document.getElementById('ingest-podcast-name').value.trim() || undefined;
-        const whisper_model = document.getElementById('whisper-model').value;
-
-        try {
-            await api('/ingest/youtube/download-transcribe', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ channel, podcast_name: name, limit, whisper_model }),
-            });
-            document.getElementById('ingest-channel').value = '';
-            refreshJobs();
-        } catch (e) {
-            alert('Failed to start download: ' + e.message);
-        }
     }
 
     let jobRefreshInterval = null;
 
     async function refreshJobs() {
         try {
-            // Fetch both v1 and v2 jobs
-            const [v1Data, v2Data] = await Promise.all([
-                api('/ingest/youtube/jobs'),
-                api('/ingest/youtube/v2/jobs').catch(() => ({ jobs: [] }))
-            ]);
-            
-            const allJobs = [...v2Data.jobs, ...v1Data.jobs];
+            const data = await api('/ingest/youtube/jobs');
+            const jobs = data.jobs || [];
             const el = document.getElementById('ingest-jobs');
 
-            if (!allJobs.length) {
-                el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">No ingestion jobs</div>';
+            if (!jobs.length) {
+                el.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted)">No download jobs</div>';
                 if (jobRefreshInterval) { clearInterval(jobRefreshInterval); jobRefreshInterval = null; }
                 return;
             }
 
-            const hasActive = allJobs.some(j => !['complete','failed','skipped'].includes(j.status));
+            const hasActive = jobs.some(j => !['complete','failed','skipped'].includes(j.status));
             if (hasActive && !jobRefreshInterval) {
-                jobRefreshInterval = setInterval(refreshJobs, 2000); // Faster refresh for v2 visibility
+                jobRefreshInterval = setInterval(refreshJobs, 3000);
             } else if (!hasActive && jobRefreshInterval) {
                 clearInterval(jobRefreshInterval);
                 jobRefreshInterval = null;
             }
 
-            el.innerHTML = allJobs.map(j => j.type === 'pipeline_v2' || j.type === 'channel_v2' ? renderV2Job(j) : renderJob(j)).join('');
+            el.innerHTML = jobs.map(renderJob).join('');
         } catch (e) {
             console.error('Job refresh failed:', e);
         }
     }
     
-    function renderV2Job(j) {
-        // V2 Pipeline job with detailed step visibility
-        const stepIcons = {
-            download: '📥',
-            transcript: '📝',
-            convert_wav: '🔊',
-            mfa_align: '🎯',
-            parse_textgrid: '📊',
-            segment: '🧠',
-            store: '💾'
-        };
-        
-        const stepNames = {
-            download: 'Download MP3',
-            transcript: 'Get Transcript',
-            convert_wav: 'Convert to WAV',
-            mfa_align: 'MFA Alignment',
-            parse_textgrid: 'Parse Timestamps',
-            segment: 'LLM Segmentation',
-            store: 'Store & Index'
-        };
-        
-        const statusBadge = j.status === 'complete' ? 'badge-success' : 
-                           j.status === 'failed' ? 'badge-danger' : 'badge-info';
-        const statusLabel = j.status === 'complete' ? '✅ Complete' :
-                           j.status === 'failed' ? '❌ Failed' :
-                           j.status === 'running' ? '🔄 Running' : '⏳ Queued';
-        
-        let stepsHtml = '';
-        if (j.steps) {
-            stepsHtml = '<div style="margin-top:12px;">';
-            for (const [key, step] of Object.entries(j.steps)) {
-                const icon = step.status === 'complete' ? '✅' :
-                            step.status === 'running' ? '🔄' :
-                            step.status === 'failed' ? '❌' :
-                            step.status === 'skipped' ? '⏭️' : '⬚';
-                const duration = step.duration_sec ? `${step.duration_sec}s` : '';
-                const stepClass = step.status === 'running' ? 'color:var(--accent);font-weight:600;' : 
-                                 step.status === 'complete' ? 'color:var(--success);' :
-                                 step.status === 'failed' ? 'color:var(--danger);' : 'color:var(--text-muted);';
-                stepsHtml += `
-                    <div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;${stepClass}">
-                        <span>${icon}</span>
-                        <span style="flex:1">${stepNames[key] || key}</span>
-                        <span style="font-size:12px;opacity:0.7">${duration}</span>
-                    </div>
-                `;
-                if (step.error) {
-                    stepsHtml += `<div style="font-size:12px;color:var(--danger);margin-left:24px;margin-bottom:4px;">${esc(step.error)}</div>`;
-                }
-            }
-            stepsHtml += '</div>';
-        }
-        
-        // Progress bar
-        const progressHtml = `
-            <div class="job-progress">
-                <div class="job-progress-bar"><div class="job-progress-fill" style="width:${j.progress_pct || 0}%"></div></div>
-            </div>
-        `;
-        
-        let details = '';
-        if (j.title) details += `<div style="font-size:14px;margin-top:4px;">${esc(j.title)}</div>`;
-        if (j.transcript_source) details += `<div style="font-size:12px;color:var(--text-muted);margin-top:2px;">Transcript: ${j.transcript_source}</div>`;
-        if (j.segments_created) details += `<div style="font-size:12px;color:var(--success);margin-top:2px;">✓ ${j.segments_created} segments created</div>`;
-        if (j.error) details += `<div style="font-size:13px;color:var(--danger);margin-top:4px;">${esc(j.error)}</div>`;
-        
-        // Channel v2 progress stats
-        let channelProgressHtml = '';
-        if (j.type === 'channel_v2' && j.total_videos) {
-            const done = j.current_video || 0;
-            const pct = j.total_videos > 0 ? Math.round((done / j.total_videos) * 100) : 0;
-            channelProgressHtml = `
-                <div class="job-progress" style="margin-top:8px;">
-                    <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--text-secondary);margin-bottom:4px;">
-                        <span>${done} / ${j.total_videos} videos</span>
-                        <span>✅ ${j.success || 0} · ⏭️ ${j.skipped || 0} · ❌ ${j.failed || 0}</span>
-                    </div>
-                    <div class="job-progress-bar"><div class="job-progress-fill" style="width:${pct}%"></div></div>
-                </div>
-            `;
-            // Show last few videos being processed
-            if (j.videos && j.videos.length) {
-                const recentVideos = j.videos.slice(-5).reverse();
-                channelProgressHtml += `<div style="margin-top:8px;font-size:12px;">`;
-                for (const v of recentVideos) {
-                    const vIcon = v.status === 'complete' ? '✅' : v.status === 'skipped' ? '⏭️' : v.status === 'failed' ? '❌' : '🔄';
-                    channelProgressHtml += `<div style="display:flex;gap:6px;padding:2px 0;color:var(--text-muted);">
-                        <span>${vIcon}</span>
-                        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(v.title || v.id)}</span>
-                    </div>`;
-                }
-                channelProgressHtml += `</div>`;
-            }
-        }
-        
-        return `
-            <div class="job-card" style="border-color: ${j.status === 'running' ? 'var(--accent)' : 'var(--border)'};">
-                <div class="job-header">
-                    <span class="job-title">🎧 ${j.type === 'channel_v2' ? 'Channel: ' + esc(j.channel || '') : 'Video'}</span>
-                    <span class="list-item-badge ${statusBadge}">${statusLabel}</span>
-                </div>
-                ${details}
-                ${channelProgressHtml}
-                ${progressHtml}
-                ${stepsHtml}
-            </div>
-        `;
-    }
-
     function renderJob(j) {
         const statusMap = {
             queued: ['⏳', 'Queued', 'badge-warning'],
-            fetching_info: ['🔍', 'Fetching info...', 'badge-info'],
-            extracting_captions: ['📝', 'Extracting captions...', 'badge-info'],
-            downloading_audio: ['⬇️', 'Downloading audio...', 'badge-info'],
             downloading: ['📥', 'Downloading...', 'badge-info'],
-            transcribing: ['🎙️', 'Transcribing (Whisper)...', 'badge-info'],
-            indexing: ['📊', 'Indexing...', 'badge-info'],
             listing_videos: ['📋', 'Listing videos...', 'badge-info'],
-            ingesting: ['🔄', 'Ingesting...', 'badge-info'],
-            loading_segments: ['📂', 'Loading segments...', 'badge-info'],
-            reprocessing: ['🔄', 'Re-analyzing...', 'badge-info'],
-            swapping: ['🔀', 'Finalizing...', 'badge-info'],
             complete: ['✅', 'Complete', 'badge-success'],
             failed: ['❌', 'Failed', 'badge-danger'],
-            skipped: ['⏭️', 'Skipped (already exists)', 'badge-warning'],
+            skipped: ['⏭️', 'Skipped', 'badge-warning'],
         };
         const [icon, label, badge] = statusMap[j.status] || ['❓', j.status, 'badge-info'];
 
         let details = '';
-        if (j.title) details += `<div style="margin-top:6px;font-size:14px">${esc(j.title)}</div>`;
         if (j.error) details += `<div style="margin-top:6px;color:var(--danger);font-size:13px">${esc(j.error)}</div>`;
-        if (j.chunks_created) details += `<div style="margin-top:4px;font-size:13px;color:var(--text-secondary)">${j.chunks_created} chunks indexed</div>`;
 
-        // Reindex progress
-        if (j.type === 'reindex' && j.total_segments) {
-            const done = j.processed || 0;
-            const pct = Math.round((done / j.total_segments) * 100);
-            const label = j.deep 
-                ? `${j.processed_episodes || 0} / ${j.total_episodes || '?'} episodes · ${done} segments created`
-                : `${done} / ${j.total_segments} segments re-analyzed`;
-            details += `
-                <div class="job-progress">
-                    <span style="font-size:13px;color:var(--text-secondary)">${label}</span>
-                    <div class="job-progress-bar"><div class="job-progress-fill" style="width:${pct}%"></div></div>
-                </div>
-            `;
-        }
-
-        // Scan local progress
-        if (j.type === 'scan-local' && j.total_files) {
-            const done = (j.processed || 0) + (j.skipped || 0) + (j.failed || 0);
-            const pct = Math.round((done / j.total_files) * 100);
-            details += `
-                <div class="job-progress">
-                    <span style="font-size:13px;color:var(--text-secondary)">${j.processed || 0} processed · ${j.skipped || 0} skipped · ${j.failed || 0} failed (${done}/${j.total_files})</span>
-                    <div class="job-progress-bar"><div class="job-progress-fill" style="width:${pct}%"></div></div>
-                </div>
-            `;
-            if (j.current_file) {
-                details += `<div style="margin-top:4px;font-size:13px;color:var(--text-muted)">Current: ${esc(j.current_file)}</div>`;
-            }
-            if (j.errors && j.errors.length) {
-                details += `<div style="margin-top:4px;font-size:12px;color:var(--danger)">${j.errors.slice(-3).map(e => esc(e)).join('<br>')}</div>`;
-            }
-        }
-
-        // Channel progress
-        if (j.type === 'channel' && j.total_videos) {
+        if (j.total_videos) {
             const done = j.current_video || 0;
             const pct = Math.round((done / j.total_videos) * 100);
             details += `
@@ -1368,82 +895,24 @@
                 details += `<div class="job-videos">${recent.map(v => `
                     <div class="job-video">
                         <span>${esc((v.title || '').substring(0, 50))}</span>
-                        <span class="list-item-badge ${v.status === 'complete' ? 'badge-success' : v.status === 'skipped' ? 'badge-warning' : v.status === 'failed' || v.status === 'no_captions' ? 'badge-danger' : 'badge-info'}">${v.status}</span>
-                    </div>
-                `).join('')}</div>`;
-            }
-        }
-
-        // Download & Transcribe progress
-        if (j.type === 'download_transcribe') {
-            if (j.whisper_model) {
-                details += `<div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">🎙️ Whisper model: <strong>${esc(j.whisper_model)}</strong></div>`;
-            }
-            if (j.total_videos) {
-                const done = j.current_video || 0;
-                const pct = Math.round((done / j.total_videos) * 100);
-                details += `
-                    <div class="job-progress">
-                        <span style="font-size:13px;color:var(--text-secondary)">${done} / ${j.total_videos} videos</span>
-                        <div class="job-progress-bar"><div class="job-progress-fill" style="width:${pct}%"></div></div>
-                    </div>
-                `;
-            }
-            if (j.videos && j.videos.length) {
-                const recent = j.videos.slice(-5).reverse();
-                const statusLabels = {
-                    'downloading': '📥 downloading',
-                    'transcribing': '🎙️ transcribing',
-                    'complete': '✅ done',
-                    'failed': '❌ failed',
-                };
-                details += `<div class="job-videos">${recent.map(v => `
-                    <div class="job-video">
-                        <span>${esc((v.title || '').substring(0, 50))}</span>
-                        <span class="list-item-badge ${v.status === 'complete' ? 'badge-success' : v.status === 'failed' ? 'badge-danger' : 'badge-info'}">${statusLabels[v.status] || v.status}</span>
-                    </div>
-                `).join('')}</div>`;
-            }
-            if (j.status === 'complete' && j.success) {
-                details += `<div style="margin-top:8px;font-size:13px;color:var(--success)">✅ ${j.success} transcripts saved to <code>app/transcripts/</code></div>`;
-            }
-        }
-
-        // Download Only progress
-        if (j.type === 'download_only') {
-            details += `<div style="font-size:12px;color:var(--accent);margin-bottom:6px">📥 <strong>Download Only</strong> (MP3 + VTT)</div>`;
-            if (j.total_videos) {
-                const done = j.current_video || 0;
-                const pct = Math.round((done / j.total_videos) * 100);
-                details += `
-                    <div class="job-progress">
-                        <span style="font-size:13px;color:var(--text-secondary)">${done} / ${j.total_videos} videos</span>
-                        <div class="job-progress-bar"><div class="job-progress-fill" style="width:${pct}%"></div></div>
-                    </div>
-                `;
-            }
-            if (j.videos && j.videos.length) {
-                const recent = j.videos.slice(-5).reverse();
-                details += `<div class="job-videos">${recent.map(v => `
-                    <div class="job-video">
-                        <span>${esc((v.title || '').substring(0, 50))}</span>
                         <span class="list-item-badge ${v.status === 'complete' ? 'badge-success' : v.status === 'skipped' ? 'badge-warning' : v.status === 'failed' ? 'badge-danger' : 'badge-info'}">${v.status}${v.vtt === false ? ' (no subs)' : ''}</span>
                     </div>
                 `).join('')}</div>`;
             }
-            if (j.status === 'complete' && j.output_dir) {
-                details += `<div style="margin-top:8px;font-size:13px;color:var(--success)">📁 Files saved to: <code>${esc(j.output_dir)}</code></div>`;
-            }
+        }
+
+        if (j.status === 'complete' && j.output_dir) {
+            details += `<div style="margin-top:8px;font-size:13px;color:var(--success)">📁 Saved to: <code>${esc(j.output_dir)}</code></div>`;
         }
 
         if (j.success !== undefined) {
-            details += `<div style="margin-top:6px;font-size:13px;color:var(--text-secondary)">✅ ${j.success} success · ⏭️ ${j.skipped} skipped · ❌ ${j.failed} failed</div>`;
+            details += `<div style="margin-top:6px;font-size:13px;color:var(--text-secondary)">✅ ${j.success} success · ⏭️ ${j.skipped || 0} skipped · ❌ ${j.failed || 0} failed</div>`;
         }
 
         return `
             <div class="job-card">
                 <div class="job-header">
-                    <span class="job-title">${icon} ${j.type === 'reindex' ? 'Re-analyze Library' : j.type === 'scan-local' ? 'Scan Local Audio' : j.type === 'channel' ? 'Channel: ' + esc(j.channel || '') : esc(j.url || j.title || 'Video')}</span>
+                    <span class="job-title">${icon} ${esc(j.channel || j.title || 'Download')}</span>
                     <span class="list-item-badge ${badge}">${label}</span>
                 </div>
                 ${details}
@@ -1468,7 +937,7 @@
             try {
                 const errText = e.message || '';
                 if (errText.includes('500')) {
-                    detail = 'Server error — check the console window for details. Try: http://localhost:8765/debug/search?q=' + encodeURIComponent(q);
+                    detail = 'Server error — check the server logs for details.';
                 }
             } catch(_) {}
             el.innerHTML = `<div class="empty-state">
@@ -1548,32 +1017,22 @@
                     
                     // Check if this is a pre-extracted clip (starts at 0:00 in file)
                     const isClip = audioUrl.includes('/clips/');
-                    
+
                     if (isClip) {
                         // Clips are pre-extracted segments, play from start
-                        console.log(`[CLIP] Playing pre-extracted clip from 0:00`);
                         audio.currentTime = 0;
-                        // Update segment timing for progress bar (clip duration)
                         segEndTime = audio.duration;
                         resolve();
                     } else {
-                        // Full audio file - seek to segment start
-                        const TIMING_OFFSET_SEC = 6;
-                        const adjustedStart = startSec + TIMING_OFFSET_SEC;
-                        console.log(`[SEEK] Attempting to seek to ${adjustedStart}s (was ${startSec}s + ${TIMING_OFFSET_SEC}s offset)`);
-                        audio.currentTime = adjustedStart;
-                        console.log(`[SEEK] currentTime after set: ${audio.currentTime}s`);
-                        // Wait for seek to actually complete before playing
+                        // Full audio file — seek to segment start
+                        audio.currentTime = startSec;
                         const seekHandler = () => {
                             audio.removeEventListener('seeked', seekHandler);
-                            console.log(`[SEEK] seeked event fired, currentTime: ${audio.currentTime}s`);
                             resolve();
                         };
                         audio.addEventListener('seeked', seekHandler);
-                        // Fallback if seeked doesn't fire
                         setTimeout(() => {
                             audio.removeEventListener('seeked', seekHandler);
-                            console.log(`[SEEK] timeout fallback, currentTime: ${audio.currentTime}s`);
                             resolve();
                         }, 500);
                     }
@@ -1732,9 +1191,6 @@
     // Search on Enter
     document.getElementById('search-input')?.addEventListener('keypress', e => {
         if (e.key === 'Enter') searchTopics();
-    });
-    document.getElementById('ingest-url')?.addEventListener('keypress', e => {
-        if (e.key === 'Enter') ingestURL();
     });
 
     // ═══════════════════ INIT ═══════════════════

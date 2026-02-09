@@ -1,4 +1,4 @@
-"""Playlist generation endpoints."""
+"""Playlist generation endpoints (V4)."""
 
 from fastapi import APIRouter, HTTPException
 from typing import List, Optional
@@ -7,55 +7,57 @@ import logging
 from datetime import datetime
 
 from app.models import PlaybackManifest, PlaybackSegment
-from app.services.hybrid_search import hybrid_search
-from app.services.smart_search import smart_search
-from app.config import settings
+from app.routers.v4_segments import search_segments_v4
+from app.services.clip_extractor import get_clip_url
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/playlists", tags=["playlists"])
 
 
+def format_time(ms: int) -> str:
+    """Format milliseconds as MM:SS."""
+    total_seconds = ms // 1000
+    minutes = total_seconds // 60
+    seconds = total_seconds % 60
+    return f"{minutes}:{seconds:02d}"
+
+
 @router.get("/topic/{topic}", response_model=PlaybackManifest)
 async def get_topic_playlist(
     topic: str,
-    limit: int = 10,
-    min_density: float = 0.0,
+    limit: int = 15,
     diverse: bool = True,
 ):
     """
-    Generate a playlist of segments for a topic.
+    Generate a playlist of segments for a topic using V4 snippet search.
     
-    - **topic**: Topic to search for (e.g., "AI Safety", "Stoicism")
-    - **limit**: Max number of segments (default 10)
-    - **min_density**: Minimum density score (default 0.0)
-    - **diverse**: Ensure segments from different podcasts (default true)
+    - **topic**: Topic to search for (e.g., "AI", "consciousness")
+    - **limit**: Max number of segments (default 15)
+    - **diverse**: Ensure segments from different episodes (default true)
     """
     try:
-        # Use smart search with LLM relevance filtering
-        search_result = smart_search(
-            query=topic,
-            limit=limit,
-        )
-        segments = search_result.get("final_results", [])
+        # Use V4 search (snippet embeddings)
+        segments = search_segments_v4(query=topic, top_k=limit * 2 if diverse else limit)
         
         # Apply diversity filter if requested
         if diverse and segments:
             diverse_segments = []
             episode_counts = {}
-            podcast_counts = {}
             for seg in segments:
-                ep_id = seg.get("episode_id", "")
-                pod = seg.get("podcast_title", "")
-                if episode_counts.get(ep_id, 0) >= 3 or podcast_counts.get(pod, 0) >= 4:
+                ep_id = seg.get("video_id", "")
+                if episode_counts.get(ep_id, 0) >= 3:
                     continue
                 diverse_segments.append(seg)
                 episode_counts[ep_id] = episode_counts.get(ep_id, 0) + 1
-                podcast_counts[pod] = podcast_counts.get(pod, 0) + 1
+                if len(diverse_segments) >= limit:
+                    break
             segments = diverse_segments
+        else:
+            segments = segments[:limit]
             
     except Exception as e:
-        logger.error(f"Search failed for topic '{topic}': {type(e).__name__}: {e}")
+        logger.error(f"V4 search failed for topic '{topic}': {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=f"Search error: {type(e).__name__}: {str(e)[:200]}")
     
     if not segments:
@@ -66,27 +68,36 @@ async def get_topic_playlist(
     total_duration = 0
     
     for seg in segments:
-        duration = seg["end_ms"] - seg["start_ms"]
+        start_ms = seg.get("start_ms", 0)
+        end_ms = seg.get("end_ms", 0)
+        duration = end_ms - start_ms
         total_duration += duration
         
+        video_id = seg.get("video_id", "")
+        episode_title = seg.get("episode_title", f"Episode {video_id}")
+        snippet = seg.get("snippet", "")
+        
+        # Generate clip URL
+        clip_url = get_clip_url(video_id, start_ms, end_ms) or f"/audio/{video_id}.mp3"
+        
         # Generate pre-roll text
-        preroll = f"From {seg['podcast_title']}: {seg['summary'][:100]}..."
+        preroll = f"From {episode_title}: {snippet[:100]}..."
         
         playback_segments.append(PlaybackSegment(
-            segment_id=seg["segment_id"],
-            source_url=seg["audio_url"],
-            start_time_ms=seg["start_ms"],
-            end_time_ms=seg["end_ms"],
+            segment_id=seg.get("id", f"{video_id}_{start_ms}"),
+            source_url=clip_url,
+            start_time_ms=start_ms,
+            end_time_ms=end_ms,
             preroll_text=preroll,
-            topic_tags=seg["topic_tags"],
-            podcast_title=seg["podcast_title"],
-            episode_title=seg["episode_title"],
+            topic_tags=[],  # V4 doesn't have tags, could extract from snippet
+            podcast_title=episode_title,
+            episode_title=episode_title,
         ))
     
     return PlaybackManifest(
         playlist_id=str(uuid.uuid4()),
         title=f"Deep Dive: {topic}",
-        description=f"A curated collection of {len(playback_segments)} segments about {topic} from various podcasts.",
+        description=f"A curated collection of {len(playback_segments)} segments about {topic}.",
         segments=playback_segments,
         total_duration_ms=total_duration,
         created_at=datetime.utcnow(),
@@ -96,24 +107,15 @@ async def get_topic_playlist(
 @router.get("/search", response_model=PlaybackManifest)
 async def search_playlist(
     q: str,
-    limit: int = 10,
-    min_density: float = 0.0,
+    limit: int = 15,
 ):
     """
-    Generate a playlist from a search query.
+    Generate a playlist from a search query using V4.
     
     - **q**: Search query
     - **limit**: Max segments
-    - **min_density**: Minimum density score
     """
-    # Use hybrid search for better results
-    segments = hybrid_search(
-        query=q,
-        limit=limit,
-        chroma_path=settings.chroma_persist_dir,
-        min_density=min_density,
-        diversity=False,  # Search doesn't enforce diversity by default
-    )
+    segments = search_segments_v4(query=q, top_k=limit)
     
     if not segments:
         raise HTTPException(status_code=404, detail=f"No segments found for: {q}")
@@ -123,20 +125,27 @@ async def search_playlist(
     total_duration = 0
     
     for seg in segments:
-        duration = seg["end_ms"] - seg["start_ms"]
+        start_ms = seg.get("start_ms", 0)
+        end_ms = seg.get("end_ms", 0)
+        duration = end_ms - start_ms
         total_duration += duration
         
-        preroll = f"From {seg['podcast_title']}: {seg['summary'][:100]}..."
+        video_id = seg.get("video_id", "")
+        episode_title = seg.get("episode_title", f"Episode {video_id}")
+        snippet = seg.get("snippet", "")
+        
+        clip_url = get_clip_url(video_id, start_ms, end_ms) or f"/audio/{video_id}.mp3"
+        preroll = f"From {episode_title}: {snippet[:100]}..."
         
         playback_segments.append(PlaybackSegment(
-            segment_id=seg["segment_id"],
-            source_url=seg["audio_url"],
-            start_time_ms=seg["start_ms"],
-            end_time_ms=seg["end_ms"],
+            segment_id=seg.get("id", f"{video_id}_{start_ms}"),
+            source_url=clip_url,
+            start_time_ms=start_ms,
+            end_time_ms=end_ms,
             preroll_text=preroll,
-            topic_tags=seg["topic_tags"],
-            podcast_title=seg["podcast_title"],
-            episode_title=seg["episode_title"],
+            topic_tags=[],
+            podcast_title=episode_title,
+            episode_title=episode_title,
         ))
     
     return PlaybackManifest(
@@ -155,36 +164,22 @@ async def get_daily_mix(
     limit: int = 10,
 ):
     """
-    Generate a personalized daily mix.
+    Generate a personalized daily mix using V4.
     
     - **topics**: Comma-separated list of topics (optional)
     - **limit**: Total segments in mix
-    
-    If no topics provided, returns a mix of high-density segments.
     """
     if topics:
         topic_list = [t.strip() for t in topics.split(",")]
-        segments_per_topic = max(1, limit // len(topic_list))
+        segments_per_topic = max(2, limit // len(topic_list))
         
         all_segments = []
         for topic in topic_list:
-            topic_segs = hybrid_search(
-                query=topic,
-                limit=segments_per_topic,
-                chroma_path=settings.chroma_persist_dir,
-                min_density=0.5,
-                diversity=True,
-            )
+            topic_segs = search_segments_v4(query=topic, top_k=segments_per_topic)
             all_segments.extend(topic_segs)
     else:
-        # Get high-density segments across all topics
-        all_segments = hybrid_search(
-            query="interesting insights analysis",
-            limit=limit * 2,
-            chroma_path=settings.chroma_persist_dir,
-            min_density=0.6,
-            diversity=True,
-        )
+        # Get broad mix
+        all_segments = search_segments_v4(query="interesting insights analysis discussion", top_k=limit * 2)
         # Shuffle for variety
         import random
         random.shuffle(all_segments)
@@ -198,20 +193,27 @@ async def get_daily_mix(
     total_duration = 0
     
     for seg in all_segments[:limit]:
-        duration = seg["end_ms"] - seg["start_ms"]
+        start_ms = seg.get("start_ms", 0)
+        end_ms = seg.get("end_ms", 0)
+        duration = end_ms - start_ms
         total_duration += duration
         
-        preroll = f"From {seg['podcast_title']}: {seg['summary'][:100]}..."
+        video_id = seg.get("video_id", "")
+        episode_title = seg.get("episode_title", f"Episode {video_id}")
+        snippet = seg.get("snippet", "")
+        
+        clip_url = get_clip_url(video_id, start_ms, end_ms) or f"/audio/{video_id}.mp3"
+        preroll = f"From {episode_title}: {snippet[:100]}..."
         
         playback_segments.append(PlaybackSegment(
-            segment_id=seg["segment_id"],
-            source_url=seg["audio_url"],
-            start_time_ms=seg["start_ms"],
-            end_time_ms=seg["end_ms"],
+            segment_id=seg.get("id", f"{video_id}_{start_ms}"),
+            source_url=clip_url,
+            start_time_ms=start_ms,
+            end_time_ms=end_ms,
             preroll_text=preroll,
-            topic_tags=seg["topic_tags"],
-            podcast_title=seg["podcast_title"],
-            episode_title=seg["episode_title"],
+            topic_tags=[],
+            podcast_title=episode_title,
+            episode_title=episode_title,
         ))
     
     return PlaybackManifest(

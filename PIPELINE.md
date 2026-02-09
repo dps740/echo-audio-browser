@@ -119,6 +119,11 @@ POST /v3/segment-refined/{video_id}
    - Generate SPECIFIC snippet (not vague summaries)
 6. **Store** → Segments with boundaries, snippets, embeddings in ChromaDB
 
+**Persistence:** Data stored in `chroma_data/` directory. Survives server restarts.
+- Collection: `v3_segments`
+- Stores: sentences (with embeddings), refined segments (with snippets)
+- Search loads from ChromaDB if not in memory cache
+
 **Cost:** ~$0.02 per episode (embeddings + LLM calls)
 
 ---

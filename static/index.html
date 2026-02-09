@@ -1545,26 +1545,38 @@
                     if (resolved) return;
                     resolved = true;
                     cleanup();
-                    // TEMP: Add offset to correct whisper vs mp3 timing mismatch
-                    // TODO: Re-transcribe from actual mp3 files for proper fix
-                    const TIMING_OFFSET_SEC = 6;
-                    const adjustedStart = startSec + TIMING_OFFSET_SEC;
-                    console.log(`[SEEK] Attempting to seek to ${adjustedStart}s (was ${startSec}s + ${TIMING_OFFSET_SEC}s offset)`);
-                    audio.currentTime = adjustedStart;
-                    console.log(`[SEEK] currentTime after set: ${audio.currentTime}s`);
-                    // Wait for seek to actually complete before playing
-                    const seekHandler = () => {
-                        audio.removeEventListener('seeked', seekHandler);
-                        console.log(`[SEEK] seeked event fired, currentTime: ${audio.currentTime}s`);
+                    
+                    // Check if this is a pre-extracted clip (starts at 0:00 in file)
+                    const isClip = audioUrl.includes('/clips/');
+                    
+                    if (isClip) {
+                        // Clips are pre-extracted segments, play from start
+                        console.log(`[CLIP] Playing pre-extracted clip from 0:00`);
+                        audio.currentTime = 0;
+                        // Update segment timing for progress bar (clip duration)
+                        segEndTime = audio.duration;
                         resolve();
-                    };
-                    audio.addEventListener('seeked', seekHandler);
-                    // Fallback if seeked doesn't fire
-                    setTimeout(() => {
-                        audio.removeEventListener('seeked', seekHandler);
-                        console.log(`[SEEK] timeout fallback, currentTime: ${audio.currentTime}s`);
-                        resolve();
-                    }, 500);
+                    } else {
+                        // Full audio file - seek to segment start
+                        const TIMING_OFFSET_SEC = 6;
+                        const adjustedStart = startSec + TIMING_OFFSET_SEC;
+                        console.log(`[SEEK] Attempting to seek to ${adjustedStart}s (was ${startSec}s + ${TIMING_OFFSET_SEC}s offset)`);
+                        audio.currentTime = adjustedStart;
+                        console.log(`[SEEK] currentTime after set: ${audio.currentTime}s`);
+                        // Wait for seek to actually complete before playing
+                        const seekHandler = () => {
+                            audio.removeEventListener('seeked', seekHandler);
+                            console.log(`[SEEK] seeked event fired, currentTime: ${audio.currentTime}s`);
+                            resolve();
+                        };
+                        audio.addEventListener('seeked', seekHandler);
+                        // Fallback if seeked doesn't fire
+                        setTimeout(() => {
+                            audio.removeEventListener('seeked', seekHandler);
+                            console.log(`[SEEK] timeout fallback, currentTime: ${audio.currentTime}s`);
+                            resolve();
+                        }, 500);
+                    }
                 };
                 
                 const onError = (e) => {
@@ -1658,18 +1670,33 @@
     audio.addEventListener('timeupdate', () => {
         if (transitioning || !playlist) return;
         const seg = playlist.segments[playIndex];
-        const startSec = seg.start_time_ms / 1000;
-        const current = audio.currentTime;
-        const elapsed = current - startSec;
-        const total = segEndTime - startSec;
-        const remaining = segEndTime - current;
-        const pct = Math.max(0, Math.min(100, (elapsed / total) * 100));
+        const audioUrl = seg.source_url || '';
+        const isClip = audioUrl.includes('/clips/');
+        
+        let elapsed, total, remaining, pct;
+        
+        if (isClip) {
+            // For clips: track from 0 to duration
+            elapsed = audio.currentTime;
+            total = audio.duration || 1;
+            remaining = total - elapsed;
+            pct = Math.max(0, Math.min(100, (elapsed / total) * 100));
+        } else {
+            // For full audio: track within segment
+            const startSec = seg.start_time_ms / 1000;
+            elapsed = audio.currentTime - startSec;
+            total = segEndTime - startSec;
+            remaining = segEndTime - audio.currentTime;
+            pct = Math.max(0, Math.min(100, (elapsed / total) * 100));
+        }
 
         document.getElementById('player-progress-fill').style.width = pct + '%';
         document.getElementById('player-time-current').textContent = fmt(Math.max(0, elapsed) * 1000);
         document.getElementById('player-time-remaining').textContent = '-' + fmt(Math.max(0, remaining) * 1000);
 
-        if (current >= segEndTime && !transitioning) {
+        // Check for segment end
+        const atEnd = isClip ? (audio.currentTime >= audio.duration - 0.5) : (audio.currentTime >= segEndTime);
+        if (atEnd && !transitioning && !audio.paused) {
             if (playIndex < playlist.segments.length - 1) {
                 playSegment(playIndex + 1);
             } else {

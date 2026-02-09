@@ -1,4 +1,30 @@
 
+## 2026-02-08: V3 Persistence Fix
+
+### Problem
+V3 segment-refined endpoint only cached results in memory. Data was lost on server restart.
+
+### Root Cause
+`test_v3.py` used `_cache` (Python dict) instead of ChromaDB for storing refined segments.
+
+### Fix
+1. **Added ChromaDB persistence** to `test_v3.py`:
+   - `_get_v3_collection()` - Gets/creates `v3_segments` collection
+   - `_save_to_chromadb()` - Stores sentences + refined segments after LLM processing
+   - `_load_from_chromadb()` - Loads from ChromaDB when cache is empty
+   - `LoadedRefinedSegment` class - Reconstructs objects from stored JSON
+
+2. **Updated endpoints**:
+   - `POST /v3/segment-refined/{video_id}` - Now calls `_save_to_chromadb()` after processing
+   - `GET /v3/search-refined/{video_id}` - Loads from ChromaDB if not in memory cache
+
+### Result
+- Indexed episodes now survive server restarts
+- Search works immediately after restart (loads from ChromaDB)
+- Cost: ~$0.02/episode for indexing, search is free
+
+---
+
 ## 2026-02-06: Timestamp Resolution Fix
 
 ### Problem

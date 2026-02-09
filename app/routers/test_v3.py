@@ -12,6 +12,8 @@ from pydantic import BaseModel
 from typing import List, Optional
 from pathlib import Path
 import numpy as np
+import chromadb
+import json
 
 from app.services.segmentation_v3 import (
     segment_transcript_v3,
@@ -27,6 +29,82 @@ from app.services.search_v3 import (
 from app.config import settings
 
 router = APIRouter(prefix="/v3", tags=["v3-test"])
+
+# Persistent ChromaDB client for V3 data
+_chroma_client = chromadb.PersistentClient(path="./chroma_data")
+
+def _get_v3_collection():
+    """Get or create the V3 segments collection."""
+    return _chroma_client.get_or_create_collection(
+        name="v3_segments",
+        metadata={"description": "V3 refined segments with sentences"}
+    )
+
+def _save_to_chromadb(video_id: str, sentences: list, refined_segments: list):
+    """Persist V3 data to ChromaDB."""
+    collection = _get_v3_collection()
+    
+    # Serialize data
+    data = {
+        'sentences': [{'text': s.text, 'start_ms': s.start_ms, 'end_ms': s.end_ms, 
+                       'embedding': s.embedding.tolist() if hasattr(s, 'embedding') and hasattr(s.embedding, 'tolist') else list(s.embedding) if hasattr(s, 'embedding') and s.embedding is not None else None} 
+                      for s in sentences],
+        'refined_segments': [{'start_ms': r.start_ms, 'end_ms': r.end_ms, 
+                              'original_start_ms': r.original_start_ms, 'snippet': r.snippet,
+                              'sentence_indices': list(r.sentence_indices) if r.sentence_indices else []}
+                             for r in refined_segments]
+    }
+    
+    # Upsert to collection
+    # Pass dummy embedding to prevent ChromaDB from auto-embedding the JSON blob
+    # (this collection is just key-value storage, not used for semantic search)
+    collection.upsert(
+        ids=[video_id],
+        documents=[json.dumps(data)],
+        metadatas=[{"video_id": video_id, "num_sentences": len(sentences), "num_segments": len(refined_segments)}],
+        embeddings=[[0.0] * 384]  # Dummy embedding - prevents local ONNX model from running
+    )
+    print(f"Persisted {video_id} to ChromaDB: {len(sentences)} sentences, {len(refined_segments)} segments")
+
+class LoadedRefinedSegment:
+    """A simple class to hold loaded refined segment data."""
+    def __init__(self, start_ms, end_ms, original_start_ms, snippet, sentence_indices):
+        self.start_ms = start_ms
+        self.end_ms = end_ms
+        self.original_start_ms = original_start_ms
+        self.snippet = snippet
+        self.sentence_indices = sentence_indices
+
+def _load_from_chromadb(video_id: str):
+    """Load V3 data from ChromaDB."""
+    collection = _get_v3_collection()
+    result = collection.get(ids=[video_id])
+    
+    if not result['documents'] or not result['documents'][0]:
+        return None
+    
+    data = json.loads(result['documents'][0])
+    
+    # Reconstruct Sentence objects
+    sentences = []
+    for s in data['sentences']:
+        sent = Sentence(text=s['text'], start_ms=s['start_ms'], end_ms=s['end_ms'])
+        sent.embedding = np.array(s['embedding']) if s.get('embedding') else None
+        sentences.append(sent)
+    
+    # Reconstruct as objects with attributes (needed by search code)
+    refined_segments = [
+        LoadedRefinedSegment(
+            start_ms=r['start_ms'],
+            end_ms=r['end_ms'],
+            original_start_ms=r['original_start_ms'],
+            snippet=r['snippet'],
+            sentence_indices=r['sentence_indices']
+        )
+        for r in data['refined_segments']
+    ]
+    
+    return {'sentences': sentences, 'refined_segments': refined_segments}
 
 
 class SegmentResponse(BaseModel):
@@ -370,6 +448,12 @@ async def segment_episode_refined(video_id: str, similarity_threshold: float = 0
         'refined_segments': refined
     }
     
+    # Save to V4 format (snippet embeddings) - efficient storage
+    from app.routers.v4_segments import save_segments_v4
+    save_segments_v4(video_id, f"Episode {video_id}", refined)
+    
+    # Note: V3 blob storage removed - was causing OOM crashes (53MB per episode)
+    
     # Calculate cost estimate
     # ~700 tokens input + 50 output per segment, gpt-4o-mini pricing
     cost_per_segment = 0.00015
@@ -405,7 +489,12 @@ async def search_refined(video_id: str, q: str, top_k: int = 5):
     Example: GET /v3/search-refined/gXY1kx7zlkk?q=AI
     """
     if video_id not in _cache:
-        raise HTTPException(400, f"Episode not segmented yet. POST /v3/segment-refined/{video_id} first")
+        # Try loading from ChromaDB
+        stored = _load_from_chromadb(video_id)
+        if stored:
+            _cache[video_id] = stored
+        else:
+            raise HTTPException(400, f"Episode not segmented yet. POST /v3/segment-refined/{video_id} first")
     
     data = _cache[video_id]
     

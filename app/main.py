@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 import os
 
 from app.config import settings
-from app.routers import indexing, search, playlists, library, download
+from app.routers import indexing, search, playlists, library, download, search_v2
 
 app = FastAPI(
     title=settings.app_name,
@@ -28,6 +28,7 @@ app.add_middleware(
 # Include routers
 app.include_router(indexing.router)
 app.include_router(search.router)
+app.include_router(search_v2.router)  # New Typesense-based search
 app.include_router(playlists.router)
 app.include_router(library.router)
 app.include_router(download.router)

@@ -49,17 +49,14 @@ async def search_all(q: str, top_k: int = 10, video_id: Optional[str] = None):
 
 @router.get("/clip/{video_id}")
 async def get_clip(video_id: str, start_ms: int, end_ms: int):
-    """Generate and return a clip URL for a time range."""
+    """Generate a clip and redirect to it for direct audio playback."""
+    from fastapi.responses import RedirectResponse
     clip_url = get_clip_url(video_id, start_ms, end_ms)
 
     if clip_url:
-        return {
-            "video_id": video_id,
-            "start_ms": start_ms,
-            "end_ms": end_ms,
-            "duration_s": (end_ms - start_ms) / 1000,
-            "clip_url": clip_url
-        }
+        # Redirect to the actual audio file for direct playback
+        return RedirectResponse(url=clip_url, status_code=302)
     else:
+        # Fallback to full MP3 with time range (less accurate but works)
         from fastapi import HTTPException
         raise HTTPException(500, f"Failed to generate clip for {video_id}")

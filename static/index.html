@@ -910,23 +910,83 @@
     }
 
     // ═══════════════════ PLAYER / SEARCH ═══════════════════
+    let mentionsPlaylist = null; // Secondary playlist for mentions
+    let relatedPlaylist = null;  // Tertiary playlist for related
+    let searchMeta = null;       // Search metadata (intent, expanded terms)
+    
     async function searchTopics() {
         const q = document.getElementById('search-input').value.trim();
         if (!q) return;
         const el = document.getElementById('search-results');
-        el.innerHTML = '<div style="text-align:center;padding:30px"><div class="spinner"></div><p style="margin-top:10px;color:var(--text-muted)">Searching...</p></div>';
+        el.innerHTML = '<div style="text-align:center;padding:30px"><div class="spinner"></div><p style="margin-top:10px;color:var(--text-muted)">Searching with AI...</p></div>';
 
         try {
-            const data = await api(`/playlists/topic/${encodeURIComponent(q)}?limit=15`);
-            playlist = data;
+            // Use Level 3 AI-powered search (hybrid + rerank)
+            const data = await api(`/v2/search/l3?q=${encodeURIComponent(q)}&limit=10`);
+            
+            // Store search metadata
+            searchMeta = {
+                intent: data.intent,
+                expandedTerms: data.expanded_terms || []
+            };
+            
+            // Build main playlist from ABOUT results (primary autoplay)
+            const aboutResults = data.about || [];
+            const mentionResults = data.mentions || [];
+            const relatedResults = data.related || [];
+            
+            const toSegment = (r) => ({
+                episode_id: r.episode_id,
+                episode_title: r.summary || `Episode ${r.episode_id}`,
+                podcast_title: 'Echo',
+                start_time_ms: r.start_ms,
+                end_time_ms: r.end_ms,
+                preroll_text: r.summary,
+                explanation: r.explanation || '',
+                confidence: r.confidence || 'medium',
+                relevance_score: r.relevance_score || 0,
+                topic_tags: r.keywords?.slice(0, 5) || [],
+                source_url: r.clip_url || `/audio/${r.episode_id}.mp3`
+            });
+            
+            // Main playlist = ABOUT results
+            const aboutSegments = aboutResults.map(toSegment);
+            const aboutDuration = aboutResults.reduce((sum, r) => sum + (r.end_ms - r.start_ms), 0);
+            
+            playlist = {
+                title: `About: ${q}`,
+                total_duration_ms: aboutDuration,
+                segments: aboutSegments
+            };
+            
+            // Secondary playlist = MENTIONS
+            const mentionSegments = mentionResults.map(toSegment);
+            const mentionDuration = mentionResults.reduce((sum, r) => sum + (r.end_ms - r.start_ms), 0);
+            
+            mentionsPlaylist = {
+                title: `Also discusses: ${q}`,
+                total_duration_ms: mentionDuration,
+                segments: mentionSegments
+            };
+            
+            // Tertiary playlist = RELATED
+            const relatedSegments = relatedResults.map(toSegment);
+            const relatedDuration = relatedResults.reduce((sum, r) => sum + (r.end_ms - r.start_ms), 0);
+            
+            relatedPlaylist = {
+                title: `Related topics`,
+                total_duration_ms: relatedDuration,
+                segments: relatedSegments
+            };
+            
             renderSearchResults();
         } catch (e) {
-            // Try to get the actual error detail from the API
+            console.error('Search error:', e);
             let detail = 'Try a different search term';
             try {
                 const errText = e.message || '';
                 if (errText.includes('500')) {
-                    detail = 'Server error — check the server logs for details.';
+                    detail = 'Server error — the AI search may be warming up. Try again in a moment.';
                 }
             } catch(_) {}
             el.innerHTML = `<div class="empty-state">
@@ -938,24 +998,133 @@
     }
 
     function renderSearchResults() {
-        if (!playlist?.segments?.length) return;
         const el = document.getElementById('search-results');
-        el.innerHTML = `
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                <h2 style="font-size:18px">${esc(playlist.title)}</h2>
-                <span style="color:var(--text-muted);font-size:13px">${playlist.segments.length} segments · ${fmtDuration(playlist.total_duration_ms)}</span>
-            </div>
-            ${playlist.segments.map((seg, i) => `
-                <div class="segment-card ${i === playIndex ? 'playing' : ''}" id="seg-${i}" onclick="playSegment(${i})">
-                    <div class="seg-title">${esc(seg.episode_title)}</div>
-                    <div class="seg-meta">
-                        ${esc(seg.podcast_title)} · ${fmtDuration(seg.end_time_ms - seg.start_time_ms)} · Starts at ${fmt(seg.start_time_ms)}
-                    </div>
-                    <div class="seg-text">${esc(seg.preroll_text)}</div>
-                    ${seg.topic_tags?.length ? '<div style="margin-top:6px">' + seg.topic_tags.map(t => `<span class="tag">${esc(t)}</span>`).join('') + '</div>' : ''}
+        let html = '';
+        
+        // Search metadata header (intent + expanded terms)
+        if (searchMeta && (searchMeta.intent || searchMeta.expandedTerms?.length)) {
+            html += `
+                <div style="background:var(--bg-tertiary);border-radius:8px;padding:12px 16px;margin-bottom:16px;border-left:3px solid var(--accent)">
+                    ${searchMeta.intent ? `<div style="color:var(--text-primary);font-size:14px;margin-bottom:6px">🎯 ${esc(searchMeta.intent)}</div>` : ''}
+                    ${searchMeta.expandedTerms?.length > 1 ? `<div style="font-size:12px;color:var(--text-muted)">Also searching: ${searchMeta.expandedTerms.slice(1).map(t => `<span class="tag">${esc(t)}</span>`).join(' ')}</div>` : ''}
                 </div>
-            `).join('')}
-        `;
+            `;
+        }
+        
+        // Confidence badge helper
+        const confBadge = (conf) => {
+            const colors = { high: 'badge-success', medium: 'badge-warning', low: 'badge-info' };
+            return `<span class="list-item-badge ${colors[conf] || 'badge-info'}" style="font-size:10px;padding:2px 6px">${conf?.toUpperCase() || 'MEDIUM'}</span>`;
+        };
+        
+        // Primary section: ABOUT results (autoplay)
+        if (playlist?.segments?.length) {
+            html += `
+                <div style="margin-bottom:24px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                        <h2 style="font-size:18px">🎯 ${esc(playlist.title)}</h2>
+                        <span style="color:var(--text-muted);font-size:13px">${playlist.segments.length} topics · ${fmtDuration(playlist.total_duration_ms)}</span>
+                    </div>
+                    ${playlist.segments.map((seg, i) => `
+                        <div class="segment-card ${i === playIndex ? 'playing' : ''}" id="seg-${i}" onclick="playSegment(${i})">
+                            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                                <div class="seg-title">${esc(seg.episode_title)}</div>
+                                ${confBadge(seg.confidence)}
+                            </div>
+                            <div class="seg-meta">
+                                ${fmtDuration(seg.end_time_ms - seg.start_time_ms)} · Starts at ${fmt(seg.start_time_ms)}
+                            </div>
+                            ${seg.explanation ? `<div style="font-size:12px;color:var(--accent);margin-top:6px;font-style:italic">💡 ${esc(seg.explanation)}</div>` : ''}
+                            ${seg.topic_tags?.length ? '<div style="margin-top:6px">' + seg.topic_tags.map(t => `<span class="tag">${esc(t)}</span>`).join('') + '</div>' : ''}
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+        
+        // Secondary section: MENTIONS (collapsible)
+        if (mentionsPlaylist?.segments?.length) {
+            html += `
+                <details style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px">
+                    <summary style="cursor:pointer;color:var(--text-secondary);font-size:14px;padding:8px 0">
+                        📎 ${esc(mentionsPlaylist.title)} (${mentionsPlaylist.segments.length} topics)
+                    </summary>
+                    <div style="margin-top:12px;opacity:0.85">
+                        ${mentionsPlaylist.segments.map((seg, i) => `
+                            <div class="segment-card" onclick="playMention(${i})">
+                                <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                                    <div class="seg-title" style="font-size:14px">${esc(seg.episode_title)}</div>
+                                    ${confBadge(seg.confidence)}
+                                </div>
+                                <div class="seg-meta">
+                                    ${fmtDuration(seg.end_time_ms - seg.start_time_ms)} · Starts at ${fmt(seg.start_time_ms)}
+                                </div>
+                                ${seg.explanation ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px;font-style:italic">💡 ${esc(seg.explanation)}</div>` : ''}
+                            </div>
+                        `).join('')}
+                    </div>
+                </details>
+            `;
+        }
+        
+        // Tertiary section: RELATED (collapsible)
+        if (relatedPlaylist?.segments?.length) {
+            html += `
+                <details style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px">
+                    <summary style="cursor:pointer;color:var(--text-muted);font-size:13px;padding:8px 0">
+                        🔗 ${esc(relatedPlaylist.title)} (${relatedPlaylist.segments.length} topics)
+                    </summary>
+                    <div style="margin-top:12px;opacity:0.7">
+                        ${relatedPlaylist.segments.map((seg, i) => `
+                            <div class="segment-card" onclick="playRelated(${i})">
+                                <div class="seg-title" style="font-size:13px">${esc(seg.episode_title)}</div>
+                                <div class="seg-meta" style="font-size:11px">
+                                    ${fmtDuration(seg.end_time_ms - seg.start_time_ms)} · ${fmt(seg.start_time_ms)}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </details>
+            `;
+        }
+        
+        // No results at all
+        if (!playlist?.segments?.length && !mentionsPlaylist?.segments?.length && !relatedPlaylist?.segments?.length) {
+            html = `<div class="empty-state">
+                <div class="icon">😕</div>
+                <h3>No results</h3>
+                <p>Try a different search term</p>
+            </div>`;
+        }
+        
+        // Only mentions/related, no ABOUT results
+        if (!playlist?.segments?.length && (mentionsPlaylist?.segments?.length || relatedPlaylist?.segments?.length)) {
+            html = `
+                <div style="padding:16px;background:var(--bg-tertiary);border-radius:8px;margin-bottom:16px">
+                    <p style="color:var(--text-secondary);margin:0">
+                        ℹ️ No topics specifically <strong>about</strong> this query, but found related content below:
+                    </p>
+                </div>
+            ` + html;
+        }
+        
+        el.innerHTML = html;
+    }
+    
+    function playMention(index) {
+        // Switch to mentions playlist and play
+        if (!mentionsPlaylist) return;
+        playlist = mentionsPlaylist;
+        playIndex = -1;
+        playSegment(index);
+    }
+    
+    function playRelated(index) {
+        // Switch to related playlist and play
+        if (!relatedPlaylist) return;
+        playlist = relatedPlaylist;
+        playIndex = -1;
+        playSegment(index);
     }
 
     // ═══════════════════ AUDIO PLAYBACK WITH CROSSFADE ═══════════════════
